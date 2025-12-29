@@ -1,0 +1,5 @@
+CREATE OR REPLACE PROCEDURE cleanup_expired_sessions AS
+BEGIN
+  DELETE FROM sessions
+  WHERE expires_at < SYS_EXTRACT_UTC(SYSTIMESTAMP);
+END;
