@@ -1,0 +1,3 @@
+[submodule "ctrlcv_private"]
+	path = ctrlcv_private
+	url = https://github.com/wafla/ctrlcv_private.git
