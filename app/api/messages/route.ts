@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server"
 import { getConnection } from "@/lib/oracle"
+import { recordUsageEvent } from "@/lib/usage"
 
 const oracledb = require("oracledb")
 
@@ -64,6 +65,8 @@ export async function POST(request: Request) {
       }
     )
 
+    await recordUsageEvent(conn, "message_sent", { sessionId })
+
     await conn.commit()
 
     return NextResponse.json({
@@ -75,6 +78,10 @@ export async function POST(request: Request) {
     })
   } catch (err) {
     if (conn) await conn.rollback()
+    if (conn) {
+      await recordUsageEvent(conn, "api_error")
+      await conn.commit()
+    }
     console.error("POST /api/messages error:", err)
 
     return NextResponse.json(
@@ -125,6 +132,10 @@ export async function GET(request: Request) {
 
     return NextResponse.json(result.rows ?? [])
   } catch (err) {
+    if (conn) {
+      await recordUsageEvent(conn, "api_error")
+      await conn.commit()
+    }
     console.error("GET /api/messages error:", err)
 
     return NextResponse.json(

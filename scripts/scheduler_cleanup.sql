@@ -1,4 +1,17 @@
 BEGIN
+  DBMS_SCHEDULER.DROP_JOB(
+    job_name => 'JOB_CLEANUP_SESSIONS',
+    force => TRUE
+  );
+EXCEPTION
+  WHEN OTHERS THEN
+    IF SQLCODE != -27475 THEN
+      RAISE;
+    END IF;
+END;
+/
+
+BEGIN
   DBMS_SCHEDULER.CREATE_JOB (
     job_name        => 'JOB_CLEANUP_SESSIONS',
     job_type        => 'STORED_PROCEDURE',

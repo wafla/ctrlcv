@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server"
 import { getConnection } from "@/lib/oracle"
+import { cleanupExpiredFiles } from "@/lib/server-files"
+import { recordUsageEvent } from "@/lib/usage"
 const oracledb = require("oracledb")
 
 function generateSessionCode(): string {
@@ -16,6 +18,7 @@ export async function POST() {
 
   try {
     conn = await getConnection()
+    await cleanupExpiredFiles(conn)
 
     let sessionCode = generateSessionCode()
     let attempts = 0
@@ -69,14 +72,21 @@ export async function POST() {
       }
     )
 
+    const sessionId = result.outBinds!.id[0]
+    await recordUsageEvent(conn, "session_created", { sessionId })
+
     await conn.commit()
 
     return NextResponse.json({
-      sessionId: result.outBinds!.id[0],
+      sessionId,
       sessionCode,
     })
   } catch (err: any) {
     if (conn) await conn.rollback()
+    if (conn) {
+      await recordUsageEvent(conn, "api_error")
+      await conn.commit()
+    }
 
     console.error("POST /api/session error:", err)
     
@@ -112,6 +122,7 @@ export async function GET(request: Request) {
     }
 
     conn = await getConnection()
+    await cleanupExpiredFiles(conn)
 
     const result = await conn.execute(
       `
@@ -139,12 +150,19 @@ export async function GET(request: Request) {
     const sessionCode = row.SESSION_CODE
     const expiresAt = row.EXPIRES_AT
 
+    await recordUsageEvent(conn, "session_connected", { sessionId: id })
+    await conn.commit()
+
     return NextResponse.json({
       sessionId: id,
       sessionCode,
       expiresAt,
     })
   } catch (err: any) {
+    if (conn) {
+      await recordUsageEvent(conn, "api_error")
+      await conn.commit()
+    }
     console.error("GET /api/session error:", err)
 
     const errorMessage = err?.message || String(err)

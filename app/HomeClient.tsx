@@ -4,9 +4,20 @@ import { useState, useEffect, useRef } from "react"
 import { useSearchParams, useRouter } from "next/navigation"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { QRCodeGenerator } from "@/components/qr-code-generator"
-import { Loader2, Monitor, RefreshCw, Send, Copy, Check, ChevronDown, ChevronUp, AlertCircle } from "lucide-react"
+import { Loader2, Monitor, RefreshCw, Send, Copy, Check, ChevronDown, ChevronUp, AlertCircle, Paperclip, Download, File as FileIcon } from "lucide-react"
+import {
+  decryptFile,
+  decryptMessage,
+  encryptFile,
+  encryptMessage,
+  generateEncryptionKeyParam,
+  getChatCryptoKey,
+  getEncryptionKeyFromHash,
+} from "@/lib/client-crypto"
 
 interface Message {
   id: string
@@ -19,6 +30,66 @@ interface ErrorInfo {
   message: string
   details?: string
   code?: string | number
+}
+
+interface Attachment {
+  type: "image" | "file"
+  fileId: string
+  fileName: string
+  mimeType: string
+  size: number
+}
+
+const MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024
+const ALLOWED_ATTACHMENT_TYPES = [
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "application/pdf",
+  "text/plain",
+  "text/csv",
+  "application/json",
+  "application/zip",
+  "application/x-zip-compressed",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  "application/x-hwp",
+  "application/haansofthwp",
+  "application/vnd.hancom.hwp",
+  "application/vnd.hancom.hwpx",
+]
+const ALLOWED_ATTACHMENT_EXTENSIONS = ["hwp", "hwpx"]
+const ATTACHMENT_ACCEPT =
+  "image/jpeg,image/png,image/webp,application/pdf,text/plain,text/csv,application/json,.zip,.docx,.xlsx,.pptx,.hwp,.hwpx"
+
+function getFileExtension(fileName: string) {
+  return fileName.split(".").pop()?.toLowerCase() ?? ""
+}
+
+function parseAttachment(content: string): Attachment | null {
+  try {
+    const parsed = JSON.parse(content)
+    if (
+      (parsed?.type === "image" || parsed?.type === "file") &&
+      typeof parsed.fileId === "string" &&
+      typeof parsed.fileName === "string" &&
+      typeof parsed.mimeType === "string" &&
+      typeof parsed.size === "number"
+    ) {
+      return parsed
+    }
+  } catch {
+    return null
+  }
+
+  return null
+}
+
+function formatFileSize(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
 }
 
 function ErrorDisplay({ error, onDismiss }: { error: ErrorInfo; onDismiss?: () => void }) {
@@ -76,14 +147,19 @@ function ErrorDisplay({ error, onDismiss }: { error: ErrorInfo; onDismiss?: () =
 function CollapsibleMessage({ 
   message, 
   copiedMessageId, 
-  onCopy 
+  onCopy,
+  sessionId,
+  encryptionKey,
 }: { 
   message: Message
   copiedMessageId: string | null
   onCopy: (content: string, id: string) => void
+  sessionId: string
+  encryptionKey: CryptoKey | null
 }) {
   const [isExpanded, setIsExpanded] = useState(false)
   const MAX_LENGTH = 200
+  const attachment = parseAttachment(message.content)
 
   const shouldCollapse = message.content.length > MAX_LENGTH
   const displayContent = shouldCollapse && !isExpanded 
@@ -112,11 +188,19 @@ function CollapsibleMessage({
             : "bg-card border"
         }`}
       >
-        <p className="text-sm whitespace-pre-wrap break-words">
-          {displayContent}
-        </p>
+        {attachment ? (
+          <EncryptedAttachment
+            attachment={attachment}
+            sessionId={sessionId}
+            encryptionKey={encryptionKey}
+          />
+        ) : (
+          <p className="text-sm whitespace-pre-wrap break-words">
+            {displayContent}
+          </p>
+        )}
         
-        {shouldCollapse && (
+        {shouldCollapse && !attachment && (
           <button
             onClick={() => setIsExpanded(!isExpanded)}
             className="text-xs opacity-70 hover:opacity-100 mt-1 flex items-center gap-1 transition-opacity"
@@ -145,6 +229,7 @@ function CollapsibleMessage({
             variant="ghost"
             className="h-6 w-6 p-0"
             onClick={() => onCopy(message.content, message.id)}
+            disabled={Boolean(attachment)}
           >
             {copiedMessageId === message.id ? (
               <Check className="h-3 w-3" />
@@ -155,6 +240,93 @@ function CollapsibleMessage({
         </div>
       </div>
     </div>
+  )
+}
+
+function EncryptedAttachment({
+  attachment,
+  sessionId,
+  encryptionKey,
+}: {
+  attachment: Attachment
+  sessionId: string
+  encryptionKey: CryptoKey | null
+}) {
+  const [fileUrl, setFileUrl] = useState<string | null>(null)
+  const [error, setError] = useState(false)
+
+  useEffect(() => {
+    if (!encryptionKey) return
+
+    let objectUrl: string | null = null
+    let cancelled = false
+
+    async function loadImage() {
+      try {
+        const response = await fetch(
+          `/api/files/${attachment.fileId}?sessionId=${sessionId}`
+        )
+        if (!response.ok) throw new Error("Failed to load image")
+
+        const decrypted = await decryptFile(
+          await response.arrayBuffer(),
+          encryptionKey!,
+          attachment.mimeType
+        )
+        objectUrl = URL.createObjectURL(decrypted)
+        if (!cancelled) setFileUrl(objectUrl)
+      } catch {
+        if (!cancelled) setError(true)
+      }
+    }
+
+    loadImage()
+
+    return () => {
+      cancelled = true
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+    }
+  }, [attachment.fileId, attachment.mimeType, encryptionKey, sessionId])
+
+  if (error) {
+    return <p className="text-sm opacity-80">Unable to load encrypted file.</p>
+  }
+
+  if (!fileUrl) {
+    return (
+      <div className="flex items-center gap-2 text-sm opacity-80">
+        <Loader2 className="h-4 w-4 animate-spin" />
+        Loading encrypted file...
+      </div>
+    )
+  }
+
+  if (attachment.type === "file") {
+    return (
+      <div className="space-y-2">
+        <div className="flex items-center gap-2">
+          <FileIcon className="h-4 w-4 shrink-0" />
+          <div className="min-w-0">
+            <p className="truncate text-sm font-medium">{attachment.fileName}</p>
+            <p className="text-xs opacity-70">{formatFileSize(attachment.size)}</p>
+          </div>
+        </div>
+        <Button asChild size="sm" variant="secondary" className="w-full">
+          <a href={fileUrl} download={attachment.fileName}>
+            <Download className="h-4 w-4 mr-2" />
+            Download
+          </a>
+        </Button>
+      </div>
+    )
+  }
+
+  return (
+    <img
+      src={fileUrl}
+      alt={attachment.fileName || "Encrypted upload"}
+      className="max-h-72 rounded-md object-contain"
+    />
   )
 }
 
@@ -173,13 +345,23 @@ export default function HomePage() {
   const [messages, setMessages] = useState<Message[]>([])
   const [newMessage, setNewMessage] = useState("")
   const [isSending, setIsSending] = useState(false)
+  const [isUploadingAttachment, setIsUploadingAttachment] = useState(false)
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null)
+  const [isSessionCodeCopied, setIsSessionCodeCopied] = useState(false)
+  const [isEncryptionKeyCopied, setIsEncryptionKeyCopied] = useState(false)
+  const [encryptionKey, setEncryptionKey] = useState<CryptoKey | null>(null)
+  const [encryptionKeyParam, setEncryptionKeyParam] = useState<string | null>(null)
+  const [isJoinFormOpen, setIsJoinFormOpen] = useState(false)
+  const [joinSessionCode, setJoinSessionCode] = useState("")
+  const [joinEncryptionKey, setJoinEncryptionKey] = useState("")
   
   const [sessionError, setSessionError] = useState<ErrorInfo | null>(null)
+  const [joinError, setJoinError] = useState<ErrorInfo | null>(null)
   const [messageError, setMessageError] = useState<ErrorInfo | null>(null)
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const messagesContainerRef = useRef<HTMLDivElement>(null)
+  const attachmentInputRef = useRef<HTMLInputElement>(null)
 
   const [isAtBottom, setIsAtBottom] = useState(true)
   const [newMessagesCount, setNewMessagesCount] = useState(0)
@@ -215,7 +397,12 @@ export default function HomePage() {
     setMessages([])
     setNewMessage("")
     setIsSending(false)
+    setIsUploadingAttachment(false)
     setCopiedMessageId(null)
+    setIsSessionCodeCopied(false)
+    setIsEncryptionKeyCopied(false)
+    setEncryptionKey(null)
+    setEncryptionKeyParam(null)
     setIsAtBottom(true)
     setNewMessagesCount(0)
     setMessageError(null)
@@ -223,31 +410,40 @@ export default function HomePage() {
     sendingRef.current = false
   }
 
-  const updateUrl = (code: string | null) => {
+  const updateUrl = (code: string | null, keyParam?: string | null) => {
     if (code) {
-      router.replace(`?code=${code}`, { scroll: false })
+      router.replace(`?code=${code}${keyParam ? `#key=${keyParam}` : ""}`, { scroll: false })
     } else {
       router.replace("/", { scroll: false })
     }
   }
 
   const loadMessages = async (sessionId: string) => {
+    if (!encryptionKey) return
+
     try {
       const response = await fetch(`/api/messages?sessionId=${sessionId}`)
       
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}))
-        console.error("Error loading messages:", errorData)
+        const errorText = await response.text().catch(() => "")
+        console.warn("Error loading messages:", {
+          status: response.status,
+          body: errorText.slice(0, 200),
+        })
         return
       }
       
       const data = await response.json()
-      const next: Message[] = data.map((row: any) => ({
-        id: row.ID,
-        content: row.CONTENT,
-        sender_type: row.SENDER_TYPE.toLowerCase(),
-        created_at: row.CREATED_AT,
-      }))
+      const next: Message[] = await Promise.all(
+        data.map(async (row: any) => ({
+          id: row.ID,
+          content: await decryptMessage(row.CONTENT, encryptionKey).catch(
+            () => "[Unable to decrypt message]"
+          ),
+          sender_type: row.SENDER_TYPE.toLowerCase(),
+          created_at: row.CREATED_AT,
+        }))
+      )
 
       const prevMeta = messagesMetaRef.current
       const nextLastId = next.at(-1)?.id ?? null
@@ -265,13 +461,18 @@ export default function HomePage() {
       
       if (isAtBottomRef.current) setNewMessagesCount(0)
     } catch (error) {
-      console.error("Error loading messages:", error)
+      console.warn("Error loading messages:", error)
     }
   }
 
-  const connectToSession = async (code: string) => {
+  const connectToSession = async (
+    code: string,
+    keyParamOverride?: string | null,
+    createFallback = true
+  ) => {
     setIsLoading(true)
     setSessionError(null)
+    setJoinError(null)
     resetChatState()
 
     try {
@@ -279,13 +480,18 @@ export default function HomePage() {
       const data = await response.json()
 
       if (!response.ok) {
-        setSessionError({
+        const errorInfo = {
           message: data.error || "Session not found.",
           details: data.details,
           code: data.code,
-        })
-        updateUrl(null)
-        await createSession()
+        }
+        if (createFallback) {
+          setSessionError(errorInfo)
+          updateUrl(null)
+          await createSession()
+        } else {
+          setJoinError(errorInfo)
+        }
         return
       }
 
@@ -294,13 +500,42 @@ export default function HomePage() {
         sessionCode: data.sessionCode,
       })
 
+      const keyParam = keyParamOverride || getEncryptionKeyFromHash()
+      if (!keyParam || !/^\d{8}$/.test(keyParam)) {
+        const errorInfo = {
+          message: "Encryption key is missing.",
+          details: "Enter the 8-digit encryption key or use the full QR link.",
+        }
+        if (createFallback) {
+          setSessionError(errorInfo)
+          updateUrl(null)
+          await createSession()
+        } else {
+          setJoinError(errorInfo)
+        }
+        return
+      }
+
+      setEncryptionKeyParam(keyParam)
+      setEncryptionKey(await getChatCryptoKey(data.sessionCode, keyParam))
+
       const baseUrl = window.location.origin
-      setQrUrl(`${baseUrl}/mobile?code=${data.sessionCode}`)
+      setQrUrl(`${baseUrl}/mobile?code=${data.sessionCode}${keyParam ? `#key=${keyParam}` : ""}`)
+      updateUrl(data.sessionCode, keyParam)
+      setIsJoinFormOpen(false)
+      setJoinSessionCode("")
+      setJoinEncryptionKey("")
+      setJoinError(null)
     } catch (error: any) {
-      setSessionError({
+      const errorInfo = {
         message: "Server error. Please try again later.",
         details: error?.message,
-      })
+      }
+      if (createFallback) {
+        setSessionError(errorInfo)
+      } else {
+        setJoinError(errorInfo)
+      }
     } finally {
       setIsLoading(false)
     }
@@ -329,10 +564,14 @@ export default function HomePage() {
 
       setSessionData(data)
 
-      const baseUrl = window.location.origin
-      setQrUrl(`${baseUrl}/mobile?code=${data.sessionCode}`)
+      const keyParam = generateEncryptionKeyParam()
+      setEncryptionKeyParam(keyParam)
+      setEncryptionKey(await getChatCryptoKey(data.sessionCode, keyParam))
 
-      updateUrl(data.sessionCode)
+      const baseUrl = window.location.origin
+      setQrUrl(`${baseUrl}/mobile?code=${data.sessionCode}#key=${keyParam}`)
+
+      updateUrl(data.sessionCode, keyParam)
     } catch (error: any) {
       setSessionError({
         message: "Failed to create session.",
@@ -365,7 +604,7 @@ export default function HomePage() {
     }, 2000)
 
     return () => clearInterval(interval)
-  }, [sessionData])
+  }, [sessionData, encryptionKey])
 
   useEffect(() => {
     if (messages.length === 0) return
@@ -377,7 +616,7 @@ export default function HomePage() {
 
   const sendMessage = async () => {
     const content = newMessage.trim()
-    if (!content || !sessionData) return
+    if (!content || !sessionData || !encryptionKey) return
     if (sendingRef.current) return
 
     sendingRef.current = true
@@ -385,12 +624,14 @@ export default function HomePage() {
     setMessageError(null)
 
     try {
+      const encryptedContent = await encryptMessage(content, encryptionKey)
+
       const response = await fetch("/api/messages", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           sessionId: sessionData.sessionId,
-          content,
+          content: encryptedContent,
           senderType: "desktop",
         }),
       })
@@ -419,6 +660,92 @@ export default function HomePage() {
     }
   }
 
+  const sendAttachment = async (file: File | null) => {
+    if (!file || !sessionData || !encryptionKey) return
+
+    if (
+      !ALLOWED_ATTACHMENT_TYPES.includes(file.type) &&
+      !ALLOWED_ATTACHMENT_EXTENSIONS.includes(getFileExtension(file.name))
+    ) {
+      setMessageError({ message: "This file type is not supported." })
+      return
+    }
+
+    if (file.size > MAX_ATTACHMENT_SIZE) {
+      setMessageError({ message: "Files must be 10MB or smaller." })
+      return
+    }
+
+    setIsUploadingAttachment(true)
+    setMessageError(null)
+
+    try {
+      const encryptedFile = await encryptFile(file, encryptionKey)
+      const formData = new FormData()
+      formData.append("sessionId", sessionData.sessionId)
+      formData.append("mimeType", file.type)
+      formData.append("fileName", file.name)
+      formData.append("file", encryptedFile, "image.bin")
+
+      const uploadResponse = await fetch("/api/files", {
+        method: "POST",
+        body: formData,
+      })
+      const uploadData = await uploadResponse.json()
+
+      if (!uploadResponse.ok) {
+        setMessageError({
+          message: uploadData.error || "Failed to upload image.",
+          details: uploadData.details,
+          code: uploadData.code,
+        })
+        return
+      }
+
+      const attachment: Attachment = {
+        type: file.type.startsWith("image/") ? "image" : "file",
+        fileId: uploadData.fileId,
+        fileName: file.name,
+        mimeType: file.type || "application/octet-stream",
+        size: file.size,
+      }
+      const encryptedContent = await encryptMessage(
+        JSON.stringify(attachment),
+        encryptionKey
+      )
+
+      const messageResponse = await fetch("/api/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sessionId: sessionData.sessionId,
+          content: encryptedContent,
+          senderType: "desktop",
+        }),
+      })
+      const messageData = await messageResponse.json()
+
+      if (!messageResponse.ok) {
+        setMessageError({
+          message: messageData.error || "Failed to send file.",
+          details: messageData.details,
+          code: messageData.code,
+        })
+        return
+      }
+
+      loadMessages(sessionData.sessionId)
+    } catch (error: any) {
+      setMessageError({
+        message: "Failed to upload file.",
+        details: error?.message || String(error),
+      })
+    } finally {
+      setIsUploadingAttachment(false)
+      if (attachmentInputRef.current) attachmentInputRef.current.value = ""
+    }
+  }
+
   const copyToClipboard = async (content: string, messageId: string) => {
     try {
       await navigator.clipboard.writeText(content)
@@ -429,9 +756,48 @@ export default function HomePage() {
     }
   }
 
+  const copyEncryptionKey = async () => {
+    if (!encryptionKeyParam) return
+
+    try {
+      await navigator.clipboard.writeText(encryptionKeyParam)
+      setIsEncryptionKeyCopied(true)
+      setTimeout(() => setIsEncryptionKeyCopied(false), 2000)
+    } catch (error) {
+      console.error("Failed to copy encryption key:", error)
+    }
+  }
+
+  const copySessionCode = async () => {
+    if (!sessionData?.sessionCode) return
+
+    try {
+      await navigator.clipboard.writeText(sessionData.sessionCode)
+      setIsSessionCodeCopied(true)
+      setTimeout(() => setIsSessionCodeCopied(false), 2000)
+    } catch (error) {
+      console.error("Failed to copy session code:", error)
+    }
+  }
+
   const handleNewSession = async () => {
     updateUrl(null)
+    setIsJoinFormOpen(false)
     await createSession()
+  }
+
+  const handleJoinSession = async () => {
+    const code = joinSessionCode.trim().toUpperCase()
+    const key = joinEncryptionKey.trim()
+
+    if (!code || key.length !== 8) {
+      setJoinError({
+        message: "Enter a session code and 8-digit encryption key.",
+      })
+      return
+    }
+
+    await connectToSession(code, key, false)
   }
 
   return (
@@ -471,10 +837,54 @@ export default function HomePage() {
 
                 <div className="text-center space-y-2">
                   <p className="text-sm text-muted-foreground">Session Code</p>
-                  <p className="text-xl font-mono font-bold text-primary">
-                    {sessionData.sessionCode}
-                  </p>
+                  <div className="flex items-center gap-2">
+                    <div className="h-9 w-9 shrink-0" aria-hidden="true" />
+                    <p className="flex-1 rounded-md border bg-muted/40 px-3 py-2 text-center font-mono text-xl font-bold text-primary tracking-wider">
+                      {sessionData.sessionCode}
+                    </p>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={copySessionCode}
+                    >
+                      {isSessionCodeCopied ? (
+                        <Check className="h-4 w-4" />
+                      ) : (
+                        <Copy className="h-4 w-4" />
+                      )}
+                    </Button>
+                  </div>
                 </div>
+
+                {encryptionKeyParam && (
+                  <div className="space-y-2">
+                    <p className="text-sm text-muted-foreground text-center">
+                      Encryption Key
+                    </p>
+                    <div className="flex items-center gap-2">
+                      <div className="h-9 w-9 shrink-0" aria-hidden="true" />
+                      <p className="flex-1 rounded-md border bg-muted/40 px-3 py-2 text-center font-mono text-lg font-semibold tracking-widest">
+                        {encryptionKeyParam}
+                      </p>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={copyEncryptionKey}
+                      >
+                        {isEncryptionKeyCopied ? (
+                          <Check className="h-4 w-4" />
+                        ) : (
+                          <Copy className="h-4 w-4" />
+                        )}
+                      </Button>
+                    </div>
+                    <p className="text-xs text-muted-foreground text-center">
+                      Use this 8-digit key only for manual connection. It is not sent to the server.
+                    </p>
+                  </div>
+                )}
 
                 <Button
                   onClick={handleNewSession}
@@ -487,9 +897,85 @@ export default function HomePage() {
                   New Session
                 </Button>
 
+                <Button
+                  onClick={() => {
+                    setSessionError(null)
+                    setIsJoinFormOpen((open) => !open)
+                  }}
+                  variant="secondary"
+                  size="sm"
+                  className="w-full"
+                  disabled={isLoading}
+                >
+                  Join Session
+                </Button>
+
+                {isJoinFormOpen && (
+                  <div className="space-y-3 rounded-md border bg-muted/20 p-3">
+                    <div className="space-y-2">
+                      <Label htmlFor="joinSessionCode">Session Code</Label>
+                      <Input
+                        id="joinSessionCode"
+                        type="text"
+                        placeholder="Enter 6-digit code"
+                        value={joinSessionCode}
+                        onChange={(event) =>
+                          setJoinSessionCode(
+                            event.target.value.toUpperCase().slice(0, 6)
+                          )
+                        }
+                        maxLength={6}
+                        className="text-center text-lg font-mono"
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="joinEncryptionKey">Encryption Key</Label>
+                      <Input
+                        id="joinEncryptionKey"
+                        type="text"
+                        inputMode="numeric"
+                        pattern="[0-9]*"
+                        placeholder="8-digit key"
+                        value={joinEncryptionKey}
+                        onChange={(event) =>
+                          setJoinEncryptionKey(
+                            event.target.value.replace(/\D/g, "").slice(0, 8)
+                          )
+                        }
+                        maxLength={8}
+                        className="text-center text-lg font-mono tracking-widest"
+                      />
+                      <p className="text-xs text-muted-foreground text-center">
+                        Enter both values shown on the host screen.
+                      </p>
+                    </div>
+
+                    {joinError && (
+                      <ErrorDisplay
+                        error={joinError}
+                        onDismiss={() => setJoinError(null)}
+                      />
+                    )}
+
+                    <Button
+                      type="button"
+                      onClick={handleJoinSession}
+                      className="w-full"
+                      disabled={
+                        isLoading ||
+                        !joinSessionCode.trim() ||
+                        joinEncryptionKey.length !== 8
+                      }
+                    >
+                      Join
+                    </Button>
+                  </div>
+                )}
+
                 <div className="text-center space-y-2">
                   <p className="text-sm text-muted-foreground">
-                    Messages are deleted after 2 hours.
+                    Messages are encrypted in your browser and deleted after 2 hours.
                   </p>
                 </div>
 
@@ -542,6 +1028,8 @@ export default function HomePage() {
                       message={message}
                       copiedMessageId={copiedMessageId}
                       onCopy={copyToClipboard}
+                      sessionId={sessionData?.sessionId ?? ""}
+                      encryptionKey={encryptionKey}
                     />
                   ))
                 )}
@@ -560,6 +1048,29 @@ export default function HomePage() {
             </div>
 
             <div className="flex gap-2">
+              <input
+                ref={attachmentInputRef}
+                type="file"
+                accept={ATTACHMENT_ACCEPT}
+                className="hidden"
+                onChange={(event) => sendAttachment(event.target.files?.[0] ?? null)}
+              />
+
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => attachmentInputRef.current?.click()}
+                disabled={!sessionData || !encryptionKey || isUploadingAttachment}
+                size="lg"
+                className="px-4"
+              >
+                {isUploadingAttachment ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Paperclip className="h-4 w-4" />
+                )}
+              </Button>
+
               <Textarea
                 placeholder="Type your message here..."
                 value={newMessage}
@@ -573,13 +1084,13 @@ export default function HomePage() {
                   }
                 }}
                 className="flex-1 min-h-[60px] resize-none"
-                disabled={!sessionData}
+                disabled={!sessionData || !encryptionKey}
               />
 
               <Button
                 type="button"
                 onClick={sendMessage}
-                disabled={!newMessage.trim() || !sessionData || isSending}
+                disabled={!newMessage.trim() || !sessionData || !encryptionKey || isSending}
                 size="lg"
                 className="px-4"
               >

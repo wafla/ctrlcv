@@ -4,6 +4,7 @@ dotenv.config({ path: './ctrlcv_private/.env.local' });
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  outputFileTracingRoot: process.cwd(),
   eslint: {
     ignoreDuringBuilds: true,
   },

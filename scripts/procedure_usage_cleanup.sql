@@ -1,0 +1,7 @@
+CREATE OR REPLACE PROCEDURE cleanup_usage_events AS
+BEGIN
+  DELETE FROM usage_events
+  WHERE created_at < SYS_EXTRACT_UTC(SYSTIMESTAMP) - INTERVAL '30' DAY;
+
+  COMMIT;
+END;

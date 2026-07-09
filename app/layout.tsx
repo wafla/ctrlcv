@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 import { GeistSans } from 'geist/font/sans'
 import { GeistMono } from 'geist/font/mono'
+import { SiteFooter } from '@/components/site-footer'
 import './globals.css'
 
 export const metadata: Metadata = {
@@ -25,7 +26,12 @@ html {
 }
         `}</style>
       </head>
-      <body>{children}</body>
+      <body>
+        <div className="min-h-screen">
+          {children}
+          <SiteFooter />
+        </div>
+      </body>
     </html>
   )
 }
