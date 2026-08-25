@@ -156,6 +156,15 @@ Example Ubuntu crontab entry:
 
 ## Recent Updates
 
+### 2026-08
+
+- Added drag-and-drop attachment selection in desktop and mobile chat views
+- Added clipboard image paste support in the message input
+- Added confirm-before-send previews for every supported attachment
+- Added image thumbnails and file name/size details before sending
+- Added controls to remove a selected attachment before sending
+- Added downloads for decrypted images using their original file names
+
 ### 2026-07
 
 - Added browser-side encryption for messages and attachments

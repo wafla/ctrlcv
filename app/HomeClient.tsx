@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useRef } from "react"
+import { useState, useEffect, useRef, type ClipboardEvent, type DragEvent } from "react"
 import { useSearchParams, useRouter } from "next/navigation"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { QRCodeGenerator } from "@/components/qr-code-generator"
-import { Loader2, Monitor, RefreshCw, Send, Copy, Check, ChevronDown, ChevronUp, AlertCircle, Paperclip, Download, File as FileIcon } from "lucide-react"
+import { Loader2, Monitor, RefreshCw, Send, Copy, Check, ChevronDown, ChevronUp, AlertCircle, Paperclip, Download, File as FileIcon, Upload, X } from "lucide-react"
 import {
   decryptFile,
   decryptMessage,
@@ -65,6 +65,18 @@ const ATTACHMENT_ACCEPT =
 
 function getFileExtension(fileName: string) {
   return fileName.split(".").pop()?.toLowerCase() ?? ""
+}
+
+function getAttachmentValidationError(file: File) {
+  if (
+    !ALLOWED_ATTACHMENT_TYPES.includes(file.type) &&
+    !ALLOWED_ATTACHMENT_EXTENSIONS.includes(getFileExtension(file.name))
+  ) {
+    return "This file type is not supported."
+  }
+
+  if (file.size > MAX_ATTACHMENT_SIZE) return "Files must be 10MB or smaller."
+  return null
 }
 
 function parseAttachment(content: string): Attachment | null {
@@ -322,11 +334,19 @@ function EncryptedAttachment({
   }
 
   return (
-    <img
-      src={fileUrl}
-      alt={attachment.fileName || "Encrypted upload"}
-      className="max-h-72 rounded-md object-contain"
-    />
+    <div className="space-y-2">
+      <img
+        src={fileUrl}
+        alt={attachment.fileName || "Encrypted upload"}
+        className="max-h-72 rounded-md object-contain"
+      />
+      <Button asChild size="sm" variant="secondary" className="w-full">
+        <a href={fileUrl} download={attachment.fileName}>
+          <Download className="h-4 w-4 mr-2" />
+          Download
+        </a>
+      </Button>
+    </div>
   )
 }
 
@@ -346,6 +366,9 @@ export default function HomePage() {
   const [newMessage, setNewMessage] = useState("")
   const [isSending, setIsSending] = useState(false)
   const [isUploadingAttachment, setIsUploadingAttachment] = useState(false)
+  const [isDraggingAttachment, setIsDraggingAttachment] = useState(false)
+  const [pendingAttachment, setPendingAttachment] = useState<File | null>(null)
+  const [pendingAttachmentUrl, setPendingAttachmentUrl] = useState<string | null>(null)
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null)
   const [isSessionCodeCopied, setIsSessionCodeCopied] = useState(false)
   const [isEncryptionKeyCopied, setIsEncryptionKeyCopied] = useState(false)
@@ -362,6 +385,8 @@ export default function HomePage() {
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const messagesContainerRef = useRef<HTMLDivElement>(null)
   const attachmentInputRef = useRef<HTMLInputElement>(null)
+  const attachmentUploadRef = useRef(false)
+  const attachmentDragDepthRef = useRef(0)
 
   const [isAtBottom, setIsAtBottom] = useState(true)
   const [newMessagesCount, setNewMessagesCount] = useState(0)
@@ -378,6 +403,17 @@ export default function HomePage() {
 
   const sendingRef = useRef(false)
   const initializedRef = useRef(false)
+
+  useEffect(() => {
+    if (!pendingAttachment || !pendingAttachment.type.startsWith("image/")) {
+      setPendingAttachmentUrl(null)
+      return
+    }
+
+    const objectUrl = URL.createObjectURL(pendingAttachment)
+    setPendingAttachmentUrl(objectUrl)
+    return () => URL.revokeObjectURL(objectUrl)
+  }, [pendingAttachment])
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
@@ -398,6 +434,8 @@ export default function HomePage() {
     setNewMessage("")
     setIsSending(false)
     setIsUploadingAttachment(false)
+    setIsDraggingAttachment(false)
+    setPendingAttachment(null)
     setCopiedMessageId(null)
     setIsSessionCodeCopied(false)
     setIsEncryptionKeyCopied(false)
@@ -408,6 +446,8 @@ export default function HomePage() {
     setMessageError(null)
     messagesMetaRef.current = { len: 0, lastId: null }
     sendingRef.current = false
+    attachmentUploadRef.current = false
+    attachmentDragDepthRef.current = 0
   }
 
   const updateUrl = (code: string | null, keyParam?: string | null) => {
@@ -660,22 +700,16 @@ export default function HomePage() {
     }
   }
 
-  const sendAttachment = async (file: File | null) => {
-    if (!file || !sessionData || !encryptionKey) return
+  const sendAttachment = async (file: File | null): Promise<boolean> => {
+    if (!file || !sessionData || !encryptionKey || attachmentUploadRef.current) return false
 
-    if (
-      !ALLOWED_ATTACHMENT_TYPES.includes(file.type) &&
-      !ALLOWED_ATTACHMENT_EXTENSIONS.includes(getFileExtension(file.name))
-    ) {
-      setMessageError({ message: "This file type is not supported." })
-      return
+    const validationError = getAttachmentValidationError(file)
+    if (validationError) {
+      setMessageError({ message: validationError })
+      return false
     }
 
-    if (file.size > MAX_ATTACHMENT_SIZE) {
-      setMessageError({ message: "Files must be 10MB or smaller." })
-      return
-    }
-
+    attachmentUploadRef.current = true
     setIsUploadingAttachment(true)
     setMessageError(null)
 
@@ -699,7 +733,7 @@ export default function HomePage() {
           details: uploadData.details,
           code: uploadData.code,
         })
-        return
+        return false
       }
 
       const attachment: Attachment = {
@@ -731,19 +765,94 @@ export default function HomePage() {
           details: messageData.details,
           code: messageData.code,
         })
-        return
+        return false
       }
 
       loadMessages(sessionData.sessionId)
+      return true
     } catch (error: any) {
       setMessageError({
         message: "Failed to upload file.",
         details: error?.message || String(error),
       })
+      return false
     } finally {
+      attachmentUploadRef.current = false
       setIsUploadingAttachment(false)
       if (attachmentInputRef.current) attachmentInputRef.current.value = ""
     }
+  }
+
+  const prepareAttachment = (file: File | null) => {
+    if (!file) return
+
+    const validationError = getAttachmentValidationError(file)
+    if (validationError) {
+      setMessageError({ message: validationError })
+      return
+    }
+
+    setMessageError(null)
+    setPendingAttachment(file)
+    if (attachmentInputRef.current) attachmentInputRef.current.value = ""
+  }
+
+  const handleSend = async () => {
+    if (pendingAttachment) {
+      const sent = await sendAttachment(pendingAttachment)
+      if (sent) setPendingAttachment(null)
+      return
+    }
+
+    await sendMessage()
+  }
+
+  const hasDraggedFiles = (event: DragEvent<HTMLElement>) =>
+    Array.from(event.dataTransfer.types).includes("Files")
+
+  const handleAttachmentDragEnter = (event: DragEvent<HTMLElement>) => {
+    if (!sessionData || !encryptionKey || !hasDraggedFiles(event)) return
+    event.preventDefault()
+    attachmentDragDepthRef.current += 1
+    setIsDraggingAttachment(true)
+  }
+
+  const handleAttachmentDragOver = (event: DragEvent<HTMLElement>) => {
+    if (!sessionData || !encryptionKey || !hasDraggedFiles(event)) return
+    event.preventDefault()
+    event.dataTransfer.dropEffect = "copy"
+  }
+
+  const handleAttachmentDragLeave = (event: DragEvent<HTMLElement>) => {
+    if (!hasDraggedFiles(event)) return
+    event.preventDefault()
+    attachmentDragDepthRef.current = Math.max(0, attachmentDragDepthRef.current - 1)
+    if (attachmentDragDepthRef.current === 0) setIsDraggingAttachment(false)
+  }
+
+  const handleAttachmentDrop = (event: DragEvent<HTMLElement>) => {
+    if (!sessionData || !encryptionKey || !hasDraggedFiles(event)) return
+    event.preventDefault()
+    attachmentDragDepthRef.current = 0
+    setIsDraggingAttachment(false)
+    prepareAttachment(event.dataTransfer.files[0] ?? null)
+  }
+
+  const handleAttachmentPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    const imageItem = Array.from(event.clipboardData.items).find(
+      (item) => item.kind === "file" && item.type.startsWith("image/")
+    )
+    const image = imageItem?.getAsFile()
+    if (!image) return
+
+    event.preventDefault()
+    const extension = image.type.split("/")[1]?.replace("jpeg", "jpg") || "png"
+    const pastedImage = new File(
+      [image],
+      `pasted-image-${Date.now()}.${extension}`,
+      { type: image.type, lastModified: Date.now() }
+    )
+    prepareAttachment(pastedImage)
   }
 
   const copyToClipboard = async (content: string, messageId: string) => {
@@ -997,7 +1106,21 @@ export default function HomePage() {
         </Card>
 
         {/* Chat Section */}
-        <Card className="flex flex-col">
+        <Card
+          className="relative flex flex-col"
+          onDragEnter={handleAttachmentDragEnter}
+          onDragOver={handleAttachmentDragOver}
+          onDragLeave={handleAttachmentDragLeave}
+          onDrop={handleAttachmentDrop}
+        >
+          {isDraggingAttachment && (
+            <div className="absolute inset-0 z-20 flex items-center justify-center rounded-lg border-2 border-dashed border-primary bg-background/95 pointer-events-none">
+              <div className="flex flex-col items-center gap-2 text-primary">
+                <Upload className="h-8 w-8" />
+                <p className="text-sm font-medium">Drop file to send</p>
+              </div>
+            </div>
+          )}
           <CardHeader>
             <CardTitle>Text Sharing</CardTitle>
             <CardDescription>Share text instantly between your devices</CardDescription>
@@ -1053,7 +1176,7 @@ export default function HomePage() {
                 type="file"
                 accept={ATTACHMENT_ACCEPT}
                 className="hidden"
-                onChange={(event) => sendAttachment(event.target.files?.[0] ?? null)}
+                onChange={(event) => prepareAttachment(event.target.files?.[0] ?? null)}
               />
 
               <Button
@@ -1071,30 +1194,67 @@ export default function HomePage() {
                 )}
               </Button>
 
-              <Textarea
-                placeholder="Type your message here..."
-                value={newMessage}
-                onChange={(e) => setNewMessage(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.nativeEvent.isComposing) return
-                  if (e.repeat) return
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault()
-                    sendMessage()
-                  }
-                }}
-                className="flex-1 min-h-[60px] resize-none"
-                disabled={!sessionData || !encryptionKey}
-              />
+              {pendingAttachment ? (
+                <div className="flex min-h-[60px] flex-1 items-center gap-3 rounded-md border bg-muted/30 px-3 py-2">
+                  {pendingAttachment.type.startsWith("image/") && pendingAttachmentUrl ? (
+                    <img
+                      src={pendingAttachmentUrl}
+                      alt="Attachment preview"
+                      className="h-12 w-12 shrink-0 rounded object-cover"
+                    />
+                  ) : (
+                    <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded bg-muted">
+                      <FileIcon className="h-6 w-6 text-muted-foreground" />
+                    </div>
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium">{pendingAttachment.name}</p>
+                    <p className="text-xs text-muted-foreground">{formatFileSize(pendingAttachment.size)}</p>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => setPendingAttachment(null)}
+                    disabled={isUploadingAttachment}
+                    aria-label="Remove selected attachment"
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
+                </div>
+              ) : (
+                <Textarea
+                  placeholder="Type your message here..."
+                  value={newMessage}
+                  onChange={(e) => setNewMessage(e.target.value)}
+                  onPaste={handleAttachmentPaste}
+                  onKeyDown={(e) => {
+                    if (e.nativeEvent.isComposing) return
+                    if (e.repeat) return
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault()
+                      void handleSend()
+                    }
+                  }}
+                  className="flex-1 min-h-[60px] resize-none"
+                  disabled={!sessionData || !encryptionKey}
+                />
+              )}
 
               <Button
                 type="button"
-                onClick={sendMessage}
-                disabled={!newMessage.trim() || !sessionData || !encryptionKey || isSending}
+                onClick={() => void handleSend()}
+                disabled={
+                  (!pendingAttachment && !newMessage.trim()) ||
+                  !sessionData ||
+                  !encryptionKey ||
+                  isSending ||
+                  isUploadingAttachment
+                }
                 size="lg"
                 className="px-4"
               >
-                {isSending ? (
+                {isSending || isUploadingAttachment ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
                 ) : (
                   <Send className="h-4 w-4" />
