@@ -99,7 +99,7 @@ export async function encryptMessage(content: string, key: CryptoKey) {
   )}`;
 }
 
-export async function encryptFile(file: File, key: CryptoKey) {
+export async function encryptFileChunk(file: Blob, key: CryptoKey) {
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const encrypted = await crypto.subtle.encrypt(
     { name: "AES-GCM", iv },
@@ -115,19 +115,27 @@ export async function encryptFile(file: File, key: CryptoKey) {
   return new Blob([payload], { type: "application/octet-stream" });
 }
 
+export async function encryptFile(file: File, key: CryptoKey) {
+  return encryptFileChunk(file, key);
+}
+
+export async function decryptFileChunk(
+  encrypted: ArrayBuffer,
+  key: CryptoKey
+) {
+  const payload = new Uint8Array(encrypted);
+  const iv = payload.slice(0, 12);
+  const data = payload.slice(12);
+
+  return crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, data);
+}
+
 export async function decryptFile(
   encrypted: ArrayBuffer,
   key: CryptoKey,
   mimeType: string
 ) {
-  const payload = new Uint8Array(encrypted);
-  const iv = payload.slice(0, 12);
-  const data = payload.slice(12);
-  const decrypted = await crypto.subtle.decrypt(
-    { name: "AES-GCM", iv },
-    key,
-    data
-  );
+  const decrypted = await decryptFileChunk(encrypted, key);
 
   return new Blob([decrypted], { type: mimeType });
 }

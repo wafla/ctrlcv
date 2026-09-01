@@ -5,13 +5,16 @@ import { getConnection } from "@/lib/oracle";
 import {
   cleanupExpiredFiles,
   ensureUploadDir,
+  getUploadLimitBytes,
   getUploadPath,
+  MIB,
 } from "@/lib/server-files";
 import { recordUsageEvent } from "@/lib/usage";
 
 const oracledb = require("oracledb");
 
-const MAX_ENCRYPTED_FILE_SIZE = 10 * 1024 * 1024 + 1024;
+const ENCRYPTION_OVERHEAD_ALLOWANCE = 1024;
+const LEGACY_WHOLE_FILE_LIMIT = 100 * MIB;
 const ALLOWED_MIME_TYPES = new Set([
   "image/jpeg",
   "image/png",
@@ -36,11 +39,33 @@ function getExtension(fileName: string) {
   return fileName.split(".").pop()?.toLowerCase() ?? "";
 }
 
+export const dynamic = "force-dynamic";
+
+export async function GET() {
+  const maxFileSize = await getUploadLimitBytes();
+
+  return NextResponse.json(
+    { maxFileSize, uploadsAvailable: maxFileSize > 0 },
+    { headers: { "Cache-Control": "no-store" } }
+  );
+}
+
 export async function POST(request: Request) {
   let conn;
   let storagePath: string | null = null;
 
   try {
+    const maxFileSize = Math.min(
+      await getUploadLimitBytes(),
+      LEGACY_WHOLE_FILE_LIMIT
+    );
+    if (maxFileSize === 0) {
+      return NextResponse.json(
+        { error: "Uploads are temporarily unavailable due to low server storage" },
+        { status: 507 }
+      );
+    }
+
     const formData = await request.formData();
     const sessionId = formData.get("sessionId");
     const file = formData.get("file");
@@ -70,10 +95,13 @@ export async function POST(request: Request) {
       );
     }
 
-    if (file.size <= 12 || file.size > MAX_ENCRYPTED_FILE_SIZE) {
+    if (
+      file.size <= 12 ||
+      file.size > maxFileSize + ENCRYPTION_OVERHEAD_ALLOWANCE
+    ) {
       return NextResponse.json(
-        { error: "Invalid file size" },
-        { status: 400 }
+        { error: "File exceeds the current server upload limit", maxFileSize },
+        { status: 413 }
       );
     }
 

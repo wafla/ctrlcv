@@ -1,6 +1,7 @@
 import { createHash, timingSafeEqual } from "crypto"
 import { NextResponse } from "next/server"
 import { getConnection } from "@/lib/oracle"
+import { cleanupExpiredFiles } from "@/lib/server-files"
 
 export const dynamic = "force-dynamic"
 
@@ -37,6 +38,7 @@ export async function GET(request: Request) {
   try {
     connection = await getConnection()
     await connection.execute("SELECT 1 FROM dual")
+    await cleanupExpiredFiles(connection)
 
     return NextResponse.json({
       ok: true,

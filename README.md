@@ -14,7 +14,7 @@ Live service: [https://ctrlcv.net](https://ctrlcv.net)
 - The encryption key is kept in the URL fragment (`#key=...`) and is not sent to
   or stored on the server
 - Image and general file transfer, including HWP and HWPX
-- Maximum attachment size of 10 MB
+- Adaptive attachment limit based on available server storage, up to 10 GB
 - Automatic deletion of sessions, messages, and uploaded files after 2 hours
 - Anonymous usage events and daily aggregate statistics without message content
 - Responsive desktop and mobile interfaces
@@ -75,6 +75,7 @@ ORACLE_WALLET_DIR=
 ORACLE_WALLET_PASSWORD=
 USAGE_HASH_SECRET=
 DB_KEEPALIVE_SECRET=
+UPLOAD_TOKEN_SECRET=
 ```
 
 Never commit this file or the Oracle wallet to the public repository.
@@ -140,8 +141,8 @@ An Oracle scheduler job runs maintenance inside the database, but an external
 connection is still required to prevent an Always Free Autonomous Database from
 being paused due to inactivity.
 
-The protected endpoint below opens a real Oracle connection and executes a small
-query:
+The protected endpoint below opens a real Oracle connection, executes a small
+query, and removes expired encrypted upload files from local storage:
 
 ```text
 GET /api/db-keepalive
@@ -151,10 +152,43 @@ Authorization: Bearer <DB_KEEPALIVE_SECRET>
 Example Ubuntu crontab entry:
 
 ```cron
-0 9 * * * curl -fsS -H "Authorization: Bearer YOUR_SECRET" http://127.0.0.1:3000/api/db-keepalive >/dev/null 2>&1
+*/10 * * * * curl -fsS -H "Authorization: Bearer YOUR_SECRET" http://127.0.0.1:3000/api/db-keepalive >/dev/null 2>&1
 ```
 
+## Adaptive Upload Limits
+
+The attachment limit is recalculated from the free space in the upload volume:
+
+```text
+max(10 MB, min(10 GB, (free space - 5 GB reserve) / 3))
+```
+
+The limit falls back to 10 MB when free space is 5 GB or less. The client
+refreshes the current limit every 30 seconds, and the server verifies it again
+when an upload starts and before writing every encrypted chunk. In this fallback
+tier, at least 10 MB of disk space is still kept free.
+
+| Free space | Approximate maximum file size |
+| --- | ---: |
+| 35 GB or more | 10 GB |
+| 20 GB | 5 GB |
+| 10 GB | 1.7 GB |
+| 6 GB | 341 MB |
+| 5 GB or less | 10 MB |
+
 ## Recent Updates
+
+### 2026-09
+
+- Added adaptive attachment limits based on free space in the upload volume
+- Displayed the current attachment limit to desktop and mobile users and refreshed it every 30 seconds
+- Added encrypted 8 MB chunk uploads for files up to 10 GB
+- Added per-chunk retry and upload/download progress indicators
+- Added signed upload and download tokens to avoid a database query for every chunk
+- Added direct-to-disk decrypted downloads for large files in Chrome and Edge
+- Reserved 5 GB during normal operation and limited each upload to 10 MB when free space is 5 GB or less
+- Rechecked available disk space when an upload starts and before each encrypted chunk is written
+- Kept interrupted encrypted uploads under the existing session expiration cleanup policy
 
 ### 2026-08
 

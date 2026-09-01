@@ -9,13 +9,16 @@ import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Smartphone, Monitor, Loader2, Send, Copy, Check, ArrowLeft, ChevronDown, ChevronUp, AlertCircle, Paperclip, Download, File as FileIcon, Upload, X } from "lucide-react"
 import {
-  decryptFile,
   decryptMessage,
-  encryptFile,
   encryptMessage,
   getChatCryptoKey,
   getEncryptionKeyFromHash,
 } from "@/lib/client-crypto"
+import {
+  loadEncryptedAttachmentBlob,
+  saveEncryptedAttachment,
+  uploadEncryptedFile,
+} from "@/lib/client-file-transfer"
 
 interface Message {
   id: string
@@ -36,9 +39,12 @@ interface Attachment {
   fileName: string
   mimeType: string
   size: number
+  transferVersion?: "chunked-v1"
+  chunkSize?: number
+  chunkCount?: number
 }
 
-const MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024
+const DEFAULT_ATTACHMENT_SIZE = 10 * 1024 * 1024
 const ALLOWED_ATTACHMENT_TYPES = [
   "image/jpeg",
   "image/png",
@@ -65,7 +71,11 @@ function getFileExtension(fileName: string) {
   return fileName.split(".").pop()?.toLowerCase() ?? ""
 }
 
-function getAttachmentValidationError(file: File) {
+function getAttachmentValidationError(file: File, maxAttachmentSize: number) {
+  if (maxAttachmentSize <= 0) {
+    return "Uploads are temporarily unavailable due to low server storage."
+  }
+
   if (
     !ALLOWED_ATTACHMENT_TYPES.includes(file.type) &&
     !ALLOWED_ATTACHMENT_EXTENSIONS.includes(getFileExtension(file.name))
@@ -73,7 +83,9 @@ function getAttachmentValidationError(file: File) {
     return "This file type is not supported."
   }
 
-  if (file.size > MAX_ATTACHMENT_SIZE) return "Files must be 10MB or smaller."
+  if (file.size > maxAttachmentSize) {
+    return `Files must be ${formatFileSize(maxAttachmentSize)} or smaller.`
+  }
   return null
 }
 
@@ -87,6 +99,12 @@ function parseAttachment(content: string): Attachment | null {
       typeof parsed.mimeType === "string" &&
       typeof parsed.size === "number"
     ) {
+      const hasValidTransferMetadata =
+        parsed.transferVersion === undefined ||
+        (parsed.transferVersion === "chunked-v1" &&
+          typeof parsed.chunkSize === "number" &&
+          typeof parsed.chunkCount === "number")
+      if (!hasValidTransferMetadata) return null
       return parsed
     }
   } catch {
@@ -99,7 +117,8 @@ function parseAttachment(content: string): Attachment | null {
 function formatFileSize(bytes: number) {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`
 }
 
 const normalizeUtcIso = (s: string) =>
@@ -268,25 +287,24 @@ function EncryptedAttachment({
 }) {
   const [fileUrl, setFileUrl] = useState<string | null>(null)
   const [error, setError] = useState(false)
+  const [isDownloading, setIsDownloading] = useState(false)
+  const [downloadProgress, setDownloadProgress] = useState<number | null>(null)
+  const [downloadError, setDownloadError] = useState<string | null>(null)
+  const isLargeImage = attachment.type === "image" && attachment.size > 100 * 1024 * 1024
 
   useEffect(() => {
-    if (!encryptionKey) return
+    if (!encryptionKey || attachment.type !== "image" || isLargeImage) return
 
     let objectUrl: string | null = null
     let cancelled = false
 
     async function loadImage() {
       try {
-        const response = await fetch(
-          `/api/files/${attachment.fileId}?sessionId=${sessionId}`
-        )
-        if (!response.ok) throw new Error("Failed to load image")
-
-        const decrypted = await decryptFile(
-          await response.arrayBuffer(),
-          encryptionKey!,
-          attachment.mimeType
-        )
+        const decrypted = await loadEncryptedAttachmentBlob({
+          attachment,
+          encryptionKey: encryptionKey!,
+          sessionId,
+        })
         objectUrl = URL.createObjectURL(decrypted)
         if (!cancelled) setFileUrl(objectUrl)
       } catch {
@@ -300,7 +318,73 @@ function EncryptedAttachment({
       cancelled = true
       if (objectUrl) URL.revokeObjectURL(objectUrl)
     }
-  }, [attachment.fileId, attachment.mimeType, encryptionKey, sessionId])
+  }, [
+    attachment.chunkCount,
+    attachment.chunkSize,
+    attachment.fileId,
+    attachment.mimeType,
+    attachment.size,
+    attachment.transferVersion,
+    attachment.type,
+    encryptionKey,
+    isLargeImage,
+    sessionId,
+  ])
+
+  const handleDownload = async () => {
+    if (!encryptionKey || isDownloading) return
+    setIsDownloading(true)
+    setDownloadProgress(0)
+    setDownloadError(null)
+    try {
+      await saveEncryptedAttachment({
+        attachment,
+        encryptionKey,
+        sessionId,
+        onProgress: setDownloadProgress,
+      })
+    } catch (error: any) {
+      if (error?.name !== "AbortError") {
+        setDownloadError(error?.message || "Failed to download file.")
+      }
+    } finally {
+      setIsDownloading(false)
+      setDownloadProgress(null)
+    }
+  }
+
+  if (attachment.type === "file" || isLargeImage) {
+    return (
+      <div className="space-y-2">
+        <div className="flex items-center gap-2">
+          <FileIcon className="h-4 w-4 shrink-0" />
+          <div className="min-w-0">
+            <p className="truncate text-sm font-medium">{attachment.fileName}</p>
+            <p className="text-xs opacity-70">{formatFileSize(attachment.size)}</p>
+          </div>
+        </div>
+        {isLargeImage && (
+          <p className="text-xs opacity-70">Preview skipped for this large image.</p>
+        )}
+        {downloadError && <p className="text-xs text-destructive">{downloadError}</p>}
+        <Button
+          type="button"
+          size="sm"
+          variant="secondary"
+          className="w-full"
+          onClick={() => void handleDownload()}
+          disabled={isDownloading}
+        >
+          {isDownloading ? (
+            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+          ) : (
+            <Download className="h-4 w-4 mr-2" />
+          )}
+          {isDownloading ? `Downloading ${downloadProgress ?? 0}%` : "Download"}
+        </Button>
+      </div>
+    )
+  }
 
   if (error) {
     return <p className="text-sm opacity-80">Unable to load encrypted file.</p>
@@ -315,26 +399,6 @@ function EncryptedAttachment({
     )
   }
 
-  if (attachment.type === "file") {
-    return (
-      <div className="space-y-2">
-        <div className="flex items-center gap-2">
-          <FileIcon className="h-4 w-4 shrink-0" />
-          <div className="min-w-0">
-            <p className="truncate text-sm font-medium">{attachment.fileName}</p>
-            <p className="text-xs opacity-70">{formatFileSize(attachment.size)}</p>
-          </div>
-        </div>
-        <Button asChild size="sm" variant="secondary" className="w-full">
-          <a href={fileUrl} download={attachment.fileName}>
-            <Download className="h-4 w-4 mr-2" />
-            Download
-          </a>
-        </Button>
-      </div>
-    )
-  }
-
   return (
     <div className="space-y-2">
       <img
@@ -342,11 +406,21 @@ function EncryptedAttachment({
         alt={attachment.fileName || "Encrypted upload"}
         className="max-h-72 rounded-md object-contain"
       />
-      <Button asChild size="sm" variant="secondary" className="w-full">
-        <a href={fileUrl} download={attachment.fileName}>
+      {downloadError && <p className="text-xs text-destructive">{downloadError}</p>}
+      <Button
+        type="button"
+        size="sm"
+        variant="secondary"
+        className="w-full"
+        onClick={() => void handleDownload()}
+        disabled={isDownloading}
+      >
+        {isDownloading ? (
+          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+        ) : (
           <Download className="h-4 w-4 mr-2" />
-          Download
-        </a>
+        )}
+        {isDownloading ? `Downloading ${downloadProgress ?? 0}%` : "Download"}
       </Button>
     </div>
   )
@@ -370,7 +444,9 @@ export default function MobilePage() {
   const [newMessage, setNewMessage] = useState("")
   const [isSending, setIsSending] = useState(false)
   const [isUploadingAttachment, setIsUploadingAttachment] = useState(false)
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null)
   const [isDraggingAttachment, setIsDraggingAttachment] = useState(false)
+  const [maxAttachmentSize, setMaxAttachmentSize] = useState(DEFAULT_ATTACHMENT_SIZE)
   const [pendingAttachment, setPendingAttachment] = useState<File | null>(null)
   const [pendingAttachmentUrl, setPendingAttachmentUrl] = useState<string | null>(null)
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null)
@@ -384,6 +460,10 @@ export default function MobilePage() {
   const attachmentInputRef = useRef<HTMLInputElement>(null)
   const attachmentUploadRef = useRef(false)
   const attachmentDragDepthRef = useRef(0)
+  const completedAttachmentRef = useRef<{
+    file: File
+    attachment: Attachment
+  } | null>(null)
 
   const isAtBottomRef = useRef(true)
   useEffect(() => {
@@ -394,6 +474,34 @@ export default function MobilePage() {
     len: 0,
     lastId: null,
   })
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function loadUploadLimit() {
+      try {
+        const response = await fetch("/api/files", { cache: "no-store" })
+        const data = await response.json()
+        if (
+          !cancelled &&
+          response.ok &&
+          typeof data.maxFileSize === "number" &&
+          data.maxFileSize >= 0
+        ) {
+          setMaxAttachmentSize(data.maxFileSize)
+        }
+      } catch (error) {
+        console.warn("Failed to load upload limit:", error)
+      }
+    }
+
+    void loadUploadLimit()
+    const interval = setInterval(loadUploadLimit, 30000)
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+    }
+  }, [])
 
   useEffect(() => {
     if (!pendingAttachment || !pendingAttachment.type.startsWith("image/")) {
@@ -564,7 +672,7 @@ export default function MobilePage() {
   const sendAttachment = async (file: File | null): Promise<boolean> => {
     if (!file || !sessionData || !encryptionKey || attachmentUploadRef.current) return false
 
-    const validationError = getAttachmentValidationError(file)
+    const validationError = getAttachmentValidationError(file, maxAttachmentSize)
     if (validationError) {
       setMessageError({ message: validationError })
       return false
@@ -572,37 +680,33 @@ export default function MobilePage() {
 
     attachmentUploadRef.current = true
     setIsUploadingAttachment(true)
+    setUploadProgress(0)
     setMessageError(null)
 
     try {
-      const encryptedFile = await encryptFile(file, encryptionKey)
-      const formData = new FormData()
-      formData.append("sessionId", sessionData.sessionId)
-      formData.append("mimeType", file.type)
-      formData.append("fileName", file.name)
-      formData.append("file", encryptedFile, "image.bin")
+      let attachment =
+        completedAttachmentRef.current?.file === file
+          ? completedAttachmentRef.current.attachment
+          : null
 
-      const uploadResponse = await fetch("/api/files", {
-        method: "POST",
-        body: formData,
-      })
-      const uploadData = await uploadResponse.json()
-
-      if (!uploadResponse.ok) {
-        setMessageError({
-          message: uploadData.error || "Failed to upload image.",
-          details: uploadData.details,
-          code: uploadData.code,
+      if (!attachment) {
+        const uploadData = await uploadEncryptedFile({
+          file,
+          encryptionKey,
+          sessionId: sessionData.sessionId,
+          onProgress: setUploadProgress,
         })
-        return false
-      }
-
-      const attachment: Attachment = {
-        type: file.type.startsWith("image/") ? "image" : "file",
-        fileId: uploadData.fileId,
-        fileName: file.name,
-        mimeType: file.type || "application/octet-stream",
-        size: file.size,
+        attachment = {
+          type: file.type.startsWith("image/") ? "image" : "file",
+          fileId: uploadData.fileId,
+          fileName: file.name,
+          mimeType: file.type || "application/octet-stream",
+          size: file.size,
+          transferVersion: uploadData.transferVersion,
+          chunkSize: uploadData.chunkSize,
+          chunkCount: uploadData.chunkCount,
+        }
+        completedAttachmentRef.current = { file, attachment }
       }
       const encryptedContent = await encryptMessage(
         JSON.stringify(attachment),
@@ -629,6 +733,7 @@ export default function MobilePage() {
         return false
       }
 
+      completedAttachmentRef.current = null
       loadMessages(sessionData.sessionId)
       return true
     } catch (error: any) {
@@ -640,6 +745,7 @@ export default function MobilePage() {
     } finally {
       attachmentUploadRef.current = false
       setIsUploadingAttachment(false)
+      setUploadProgress(null)
       if (attachmentInputRef.current) attachmentInputRef.current.value = ""
     }
   }
@@ -647,13 +753,14 @@ export default function MobilePage() {
   const prepareAttachment = (file: File | null) => {
     if (!file) return
 
-    const validationError = getAttachmentValidationError(file)
+    const validationError = getAttachmentValidationError(file, maxAttachmentSize)
     if (validationError) {
       setMessageError({ message: validationError })
       return
     }
 
     setMessageError(null)
+    completedAttachmentRef.current = null
     setPendingAttachment(file)
     if (attachmentInputRef.current) attachmentInputRef.current.value = ""
   }
@@ -733,6 +840,7 @@ export default function MobilePage() {
     setEncryptionKeyInput("")
     setEncryptionKey(null)
     setIsUploadingAttachment(false)
+    setUploadProgress(null)
     setIsDraggingAttachment(false)
     setPendingAttachment(null)
     setConnectionError(null)
@@ -742,6 +850,7 @@ export default function MobilePage() {
     messagesMetaRef.current = { len: 0, lastId: null }
     attachmentUploadRef.current = false
     attachmentDragDepthRef.current = 0
+    completedAttachmentRef.current = null
   }
 
   useEffect(() => {
@@ -842,6 +951,11 @@ export default function MobilePage() {
           </Card>
 
           {/* Input */}
+          <p className="mb-2 text-xs text-muted-foreground">
+            {maxAttachmentSize > 0
+              ? `Current attachment limit: ${formatFileSize(maxAttachmentSize)}`
+              : "Attachments are temporarily unavailable due to low server storage."}
+          </p>
           <div className="flex gap-2">
             <input
               ref={attachmentInputRef}
@@ -881,13 +995,20 @@ export default function MobilePage() {
                 )}
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-medium">{pendingAttachment.name}</p>
-                  <p className="text-xs text-muted-foreground">{formatFileSize(pendingAttachment.size)}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {isUploadingAttachment
+                      ? `Uploading ${uploadProgress ?? 0}%`
+                      : formatFileSize(pendingAttachment.size)}
+                  </p>
                 </div>
                 <Button
                   type="button"
                   variant="ghost"
                   size="icon"
-                  onClick={() => setPendingAttachment(null)}
+                  onClick={() => {
+                    completedAttachmentRef.current = null
+                    setPendingAttachment(null)
+                  }}
                   disabled={isUploadingAttachment}
                   aria-label="Remove selected attachment"
                 >
