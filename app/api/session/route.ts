@@ -73,6 +73,12 @@ export async function POST() {
     )
 
     const sessionId = result.outBinds!.id[0]
+    const expiryResult = await conn.execute(
+      `SELECT expires_at FROM sessions WHERE id = :sessionId`,
+      { sessionId },
+      { outFormat: oracledb.OUT_FORMAT_OBJECT }
+    )
+    const expiresAt = expiryResult.rows![0].EXPIRES_AT
     await recordUsageEvent(conn, "session_created", { sessionId })
 
     await conn.commit()
@@ -80,6 +86,7 @@ export async function POST() {
     return NextResponse.json({
       sessionId,
       sessionCode,
+      expiresAt,
     })
   } catch (err: any) {
     if (conn) await conn.rollback()

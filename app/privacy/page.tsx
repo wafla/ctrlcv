@@ -35,10 +35,12 @@ export default function PrivacyPage() {
         <section className="space-y-2">
           <h2 className="text-xl font-semibold">Retention</h2>
           <p className="text-muted-foreground">
-            Sessions, messages, and uploaded files are intended to expire after
-            about 2 hours. Expired uploads are removed during cleanup when the
-            service handles related API requests. Orphaned encrypted upload
-            files may also be removed after they become old enough.
+            Sessions, messages, and uploaded files are intended to expire 2
+            hours after a session is created. Sending a message resets the
+            session and attachment expiration time to 2 hours from that
+            message. Expired uploads are removed during cleanup when the service
+            handles related API requests. Orphaned encrypted upload files may
+            also be removed after they become old enough.
           </p>
         </section>
 

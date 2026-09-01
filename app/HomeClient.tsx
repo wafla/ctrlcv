@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { QRCodeGenerator } from "@/components/qr-code-generator"
+import { SessionExpiryCountdown } from "@/components/session-expiry-countdown"
 import { Loader2, Monitor, RefreshCw, Send, Copy, Check, ChevronDown, ChevronUp, AlertCircle, Paperclip, Download, File as FileIcon, Upload, X } from "lucide-react"
 import {
   decryptMessage,
@@ -432,6 +433,7 @@ export default function HomePage() {
   const [sessionData, setSessionData] = useState<{
     sessionId: string
     sessionCode: string
+    expiresAt: string
   } | null>(null)
 
   const [isLoading, setIsLoading] = useState(false)
@@ -573,6 +575,16 @@ export default function HomePage() {
 
     try {
       const response = await fetch(`/api/messages?sessionId=${sessionId}`)
+      const expiresAt = response.headers.get("X-Session-Expires-At")
+      if (expiresAt) {
+        setSessionData((current) =>
+          current &&
+          current.sessionId === sessionId &&
+          current.expiresAt !== expiresAt
+            ? { ...current, expiresAt }
+            : current
+        )
+      }
       
       if (!response.ok) {
         const errorText = await response.text().catch(() => "")
@@ -648,6 +660,7 @@ export default function HomePage() {
       setSessionData({
         sessionId: data.sessionId,
         sessionCode: data.sessionCode,
+        expiresAt: data.expiresAt,
       })
 
       const keyParam = keyParamOverride || getEncryptionKeyFromHash()
@@ -754,7 +767,7 @@ export default function HomePage() {
     }, 2000)
 
     return () => clearInterval(interval)
-  }, [sessionData, encryptionKey])
+  }, [sessionData?.sessionId, encryptionKey])
 
   useEffect(() => {
     if (messages.length === 0) return
@@ -797,6 +810,11 @@ export default function HomePage() {
         return
       }
 
+      if (typeof data.expiresAt === "string") {
+        setSessionData((current) =>
+          current ? { ...current, expiresAt: data.expiresAt } : current
+        )
+      }
       setNewMessage("")
       loadMessages(sessionData.sessionId)
     } catch (error: any) {
@@ -874,6 +892,11 @@ export default function HomePage() {
         return false
       }
 
+      if (typeof messageData.expiresAt === "string") {
+        setSessionData((current) =>
+          current ? { ...current, expiresAt: messageData.expiresAt } : current
+        )
+      }
       completedAttachmentRef.current = null
       loadMessages(sessionData.sessionId)
       return true
@@ -1193,9 +1216,11 @@ export default function HomePage() {
 
                 <div className="text-center space-y-2">
                   <p className="text-sm text-muted-foreground">
-                    Messages are encrypted in your browser and deleted after 2 hours.
+                    Messages are encrypted in your browser.
                   </p>
                 </div>
+
+                <SessionExpiryCountdown expiresAt={sessionData.expiresAt} />
 
                 <div className="text-center space-y-2">
                   <p className="text-xs text-muted-foreground">

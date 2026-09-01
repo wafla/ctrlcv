@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
+import { SessionExpiryCountdown } from "@/components/session-expiry-countdown"
 import { Smartphone, Monitor, Loader2, Send, Copy, Check, ArrowLeft, ChevronDown, ChevronUp, AlertCircle, Paperclip, Download, File as FileIcon, Upload, X } from "lucide-react"
 import {
   decryptMessage,
@@ -539,7 +540,7 @@ export default function MobilePage() {
     }, 2000)
 
     return () => clearInterval(interval)
-  }, [sessionData, encryptionKey])
+  }, [sessionData?.sessionId, encryptionKey])
 
   useEffect(() => {
     if (messages.length === 0) return
@@ -595,6 +596,16 @@ export default function MobilePage() {
 
     try {
       const response = await fetch(`/api/messages?sessionId=${sessionId}`)
+      const expiresAt = response.headers.get("X-Session-Expires-At")
+      if (expiresAt) {
+        setSessionData((current) =>
+          current &&
+          current.sessionId === sessionId &&
+          current.expiresAt !== expiresAt
+            ? { ...current, expiresAt }
+            : current
+        )
+      }
       if (!response.ok) return
       const data = await response.json()
       const next: Message[] = await Promise.all(
@@ -657,6 +668,11 @@ export default function MobilePage() {
         return
       }
 
+      if (typeof data.expiresAt === "string") {
+        setSessionData((current) =>
+          current ? { ...current, expiresAt: data.expiresAt } : current
+        )
+      }
       setNewMessage("")
       loadMessages(sessionData.sessionId)
     } catch (error: any) {
@@ -733,6 +749,11 @@ export default function MobilePage() {
         return false
       }
 
+      if (typeof messageData.expiresAt === "string") {
+        setSessionData((current) =>
+          current ? { ...current, expiresAt: messageData.expiresAt } : current
+        )
+      }
       completedAttachmentRef.current = null
       loadMessages(sessionData.sessionId)
       return true
@@ -897,6 +918,10 @@ export default function MobilePage() {
               <div className="w-2 h-2 bg-green-600 rounded-full animate-pulse" />
               <span className="text-xs">Encrypted</span>
             </div>
+          </div>
+
+          <div className="mb-4">
+            <SessionExpiryCountdown expiresAt={sessionData.expiresAt} />
           </div>
 
           {/* 메시지 에러 표시 */}

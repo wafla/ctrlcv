@@ -15,7 +15,7 @@ Live service: [https://ctrlcv.net](https://ctrlcv.net)
   or stored on the server
 - Image and general file transfer, including HWP and HWPX
 - Adaptive attachment limit based on available server storage, up to 10 GB
-- Automatic deletion of sessions, messages, and uploaded files after 2 hours
+- Automatic deletion 2 hours after session creation or the most recent message
 - Anonymous usage events and daily aggregate statistics without message content
 - Responsive desktop and mobile interfaces
 - Privacy Policy and Terms of Service pages
@@ -180,6 +180,8 @@ tier, at least 10 MB of disk space is still kept free.
 
 ### 2026-09
 
+- Added a live session expiration countdown to desktop and mobile chat views
+- Reset session and attachment expiration to 2 hours whenever a message is sent
 - Added adaptive attachment limits based on free space in the upload volume
 - Displayed the current attachment limit to desktop and mobile users and refreshed it every 30 seconds
 - Added encrypted 8 MB chunk uploads for files up to 10 GB
