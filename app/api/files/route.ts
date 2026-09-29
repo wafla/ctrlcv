@@ -15,29 +15,6 @@ const oracledb = require("oracledb");
 
 const ENCRYPTION_OVERHEAD_ALLOWANCE = 1024;
 const LEGACY_WHOLE_FILE_LIMIT = 100 * MIB;
-const ALLOWED_MIME_TYPES = new Set([
-  "image/jpeg",
-  "image/png",
-  "image/webp",
-  "application/pdf",
-  "text/plain",
-  "text/csv",
-  "application/json",
-  "application/zip",
-  "application/x-zip-compressed",
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-  "application/x-hwp",
-  "application/haansofthwp",
-  "application/vnd.hancom.hwp",
-  "application/vnd.hancom.hwpx",
-]);
-const ALLOWED_EXTENSIONS = new Set(["hwp", "hwpx"]);
-
-function getExtension(fileName: string) {
-  return fileName.split(".").pop()?.toLowerCase() ?? "";
-}
 
 export const dynamic = "force-dynamic";
 
@@ -84,16 +61,7 @@ export async function POST(request: Request) {
       );
     }
 
-    const extension = getExtension(fileName);
-    const isAllowedExtension = ALLOWED_EXTENSIONS.has(extension);
     const storedMimeType = mimeType || "application/octet-stream";
-
-    if (!ALLOWED_MIME_TYPES.has(mimeType) && !isAllowedExtension) {
-      return NextResponse.json(
-        { error: "Unsupported file type" },
-        { status: 400 }
-      );
-    }
 
     if (
       file.size <= 12 ||

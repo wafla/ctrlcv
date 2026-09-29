@@ -180,6 +180,7 @@ tier, at least 10 MB of disk space is still kept free.
 
 ### 2026-09
 
+- Removed the existing file extension restrictions
 - Added a live session expiration countdown to desktop and mobile chat views
 - Reset session and attachment expiration to 2 hours whenever a message is sent
 - Added adaptive attachment limits based on free space in the upload volume

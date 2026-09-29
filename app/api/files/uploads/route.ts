@@ -14,30 +14,6 @@ import { recordUsageEvent } from "@/lib/usage";
 
 const oracledb = require("oracledb");
 
-const ALLOWED_MIME_TYPES = new Set([
-  "image/jpeg",
-  "image/png",
-  "image/webp",
-  "application/pdf",
-  "text/plain",
-  "text/csv",
-  "application/json",
-  "application/zip",
-  "application/x-zip-compressed",
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-  "application/x-hwp",
-  "application/haansofthwp",
-  "application/vnd.hancom.hwp",
-  "application/vnd.hancom.hwpx",
-]);
-const ALLOWED_EXTENSIONS = new Set(["hwp", "hwpx"]);
-
-function getExtension(fileName: string) {
-  return fileName.split(".").pop()?.toLowerCase() ?? "";
-}
-
 export async function POST(request: Request) {
   let conn;
   let storagePath: string | null = null;
@@ -58,11 +34,6 @@ export async function POST(request: Request) {
       chunkCount !== Math.ceil(size / FILE_CHUNK_SIZE)
     ) {
       return NextResponse.json({ error: "Invalid upload metadata" }, { status: 400 });
-    }
-
-    const extension = getExtension(fileName);
-    if (!ALLOWED_MIME_TYPES.has(mimeType) && !ALLOWED_EXTENSIONS.has(extension)) {
-      return NextResponse.json({ error: "Unsupported file type" }, { status: 400 });
     }
 
     const maxFileSize = await getUploadLimitBytes();

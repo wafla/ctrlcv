@@ -48,42 +48,10 @@ interface Attachment {
 }
 
 const DEFAULT_ATTACHMENT_SIZE = 10 * 1024 * 1024
-const ALLOWED_ATTACHMENT_TYPES = [
-  "image/jpeg",
-  "image/png",
-  "image/webp",
-  "application/pdf",
-  "text/plain",
-  "text/csv",
-  "application/json",
-  "application/zip",
-  "application/x-zip-compressed",
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-  "application/x-hwp",
-  "application/haansofthwp",
-  "application/vnd.hancom.hwp",
-  "application/vnd.hancom.hwpx",
-]
-const ALLOWED_ATTACHMENT_EXTENSIONS = ["hwp", "hwpx"]
-const ATTACHMENT_ACCEPT =
-  "image/jpeg,image/png,image/webp,application/pdf,text/plain,text/csv,application/json,.zip,.docx,.xlsx,.pptx,.hwp,.hwpx"
-
-function getFileExtension(fileName: string) {
-  return fileName.split(".").pop()?.toLowerCase() ?? ""
-}
 
 function getAttachmentValidationError(file: File, maxAttachmentSize: number) {
   if (maxAttachmentSize <= 0) {
     return "Uploads are temporarily unavailable due to low server storage."
-  }
-
-  if (
-    !ALLOWED_ATTACHMENT_TYPES.includes(file.type) &&
-    !ALLOWED_ATTACHMENT_EXTENSIONS.includes(getFileExtension(file.name))
-  ) {
-    return "This file type is not supported."
   }
 
   if (file.size > maxAttachmentSize) {
@@ -1315,7 +1283,6 @@ export default function HomePage() {
               <input
                 ref={attachmentInputRef}
                 type="file"
-                accept={ATTACHMENT_ACCEPT}
                 className="hidden"
                 onChange={(event) => prepareAttachment(event.target.files?.[0] ?? null)}
               />
