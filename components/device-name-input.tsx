@@ -4,7 +4,7 @@ import { useEffect, useId, useState } from "react"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { InfoTip } from "@/components/info-tip"
-import { DEVICE_NAME_LIMIT, type DeviceIdentity } from "@/lib/device-message"
+import { DEFAULT_DEVICE_NAME, DEVICE_NAME_LIMIT, type DeviceIdentity } from "@/lib/device-message"
 
 export function DeviceNameInput({ device, onRename }: {
   device: DeviceIdentity | null
@@ -18,10 +18,10 @@ export function DeviceNameInput({ device, onRename }: {
     <div className="flex items-center gap-2">
       <Label htmlFor={id} className="shrink-0">Device</Label>
       <Input id={id} value={name} maxLength={DEVICE_NAME_LIMIT}
-        disabled={!device} placeholder="Office PC" className="min-w-0"
+        disabled={!device} placeholder="Device name" className="min-w-0"
         onChange={(event) => setName(event.target.value)}
         onBlur={() => {
-          const savedName = name.trim() || (device?.kind === "mobile" ? "Mobile" : "PC")
+          const savedName = name.trim() || DEFAULT_DEVICE_NAME
           setName(savedName)
           onRename(savedName)
         }}

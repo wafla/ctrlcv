@@ -20,13 +20,19 @@ Live service: [https://ctrlcv.net](https://ctrlcv.net)
 - Adaptive attachment limit based on available server storage, up to 10 GB
 - Automatic deletion 2 hours after session creation or the most recent message
 - Anonymous usage events and daily aggregate statistics without message content
-- Responsive desktop and mobile interfaces
+- One responsive interface for all devices
 - Privacy Policy and Terms of Service pages
 
 Use **Copy link** to share the full connection URL. Private-key links include
 the key in `#key=...`; code-only links include only the session code. Manual
 **Join** is enabled once a session code is entered, and checks for a private key
 when connecting to a protected session. Help icons show details on hover or tap.
+QR codes and copied links open the same interface on every device. Existing
+`/mobile` links redirect to it while preserving the session code and key.
+On small screens, the QR panel starts collapsed, showing only the session code,
+expiration timer, and a copy-link button. Tap **QR** to show or hide connection
+settings. Toggling the panel preserves the session and message draft. On large
+screens, the panel stays expanded.
 
 ## Privacy Model
 
@@ -138,6 +144,7 @@ commands from the project directory shown as `exec cwd` in `pm2 show ctrlcv`.
 Before the first deployment of code-only sessions, apply
 `scripts/migration_session_access.sql` to the target Oracle database using your
 SQL client. Skip this step if it has already been applied.
+The unified interface and collapsible QR panel need no additional database changes.
 
 Update an existing PM2 deployment:
 
@@ -216,12 +223,14 @@ tier, at least 10 MB of disk space is still kept free.
 
 ### 2026-10
 
+- Unified the CtrlCV interface across devices, preserving existing `/mobile` invitation links
+- Added a collapsible QR panel on small screens with session code, expiry, and link-copy controls
 - Added editable device names and per-browser sender identification for messages and files
 - Added optional code-only sessions with private-key access enabled by default
 - Added three-chunk parallel downloads with ordered writes, retries, and cancellation on failure
 - Replaced separate code/key copy buttons with one full invitation-link button
 - Enabled Join with a session code regardless of key input length
-- Simplified desktop and mobile screens with hover/tap help icons
+- Reduced on-screen text with hover/tap help icons
 
 ### 2026-09
 

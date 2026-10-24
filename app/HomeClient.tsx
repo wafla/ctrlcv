@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useRef, type ClipboardEvent, type DragEvent } from "react"
+import { useState, useEffect, useRef, useId, type ClipboardEvent, type DragEvent } from "react"
 import { useSearchParams, useRouter } from "next/navigation"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -21,7 +21,7 @@ import {
   isOwnDeviceMessage,
   type DeviceMessage,
 } from "@/lib/device-message"
-import { Loader2, Monitor, RefreshCw, Send, Copy, Check, ChevronDown, ChevronUp, AlertCircle, Paperclip, Download, File as FileIcon, Upload, X } from "lucide-react"
+import { Loader2, Clipboard, QrCode, RefreshCw, Send, Copy, Check, ChevronDown, ChevronUp, AlertCircle, Paperclip, Download, File as FileIcon, Upload, X } from "lucide-react"
 import {
   decryptMessage,
   encryptMessage,
@@ -404,6 +404,8 @@ function EncryptedAttachment({
 }
 
 export default function HomePage() {
+  const connectionPanelId = useId()
+  const [isConnectionPanelOpen, setIsConnectionPanelOpen] = useState(false)
   const { device, renameDevice } = useDeviceIdentity()
   const searchParams = useSearchParams()
   const router = useRouter()
@@ -657,10 +659,10 @@ export default function HomePage() {
       setEncryptionKeyParam(keyParam)
       setEncryptionKey(cryptoKey)
 
-      const baseUrl = window.location.origin
-      setQrUrl(`${baseUrl}/mobile?code=${data.sessionCode}${keyParam ? `#key=${keyParam}` : ""}`)
+      setQrUrl(createSessionInviteUrl(window.location.origin, { ...data, requiresKey }, keyParam))
       updateUrl(data.sessionCode, keyParam)
       setIsJoinFormOpen(false)
+      setIsConnectionPanelOpen(false)
       setJoinSessionCode("")
       setJoinEncryptionKey("")
       setJoinError(null)
@@ -711,8 +713,7 @@ export default function HomePage() {
       setEncryptionKeyParam(keyParam)
       setEncryptionKey(await getSessionCryptoKey(data.sessionCode, requiresKey, keyParam))
 
-      const baseUrl = window.location.origin
-      setQrUrl(`${baseUrl}/mobile?code=${data.sessionCode}${keyParam ? `#key=${keyParam}` : ""}`)
+      setQrUrl(createSessionInviteUrl(window.location.origin, { ...data, requiresKey }, keyParam))
 
       updateUrl(data.sessionCode, keyParam)
     } catch (error: any) {
@@ -1011,20 +1012,64 @@ export default function HomePage() {
     await connectToSession(code, key, false)
   }
 
+  // Keep loading/errors visible; on large screens CSS always shows the panel.
+  const showConnectionDetails = isConnectionPanelOpen || !sessionData || isLoading || Boolean(sessionError)
+
   return (
     <div className="min-h-screen bg-background flex items-center justify-center p-4">
       <div className="w-full max-w-4xl grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* QR Code Section */}
-        <Card>
-          <CardHeader className="text-center">
-            <CardTitle className="flex items-center justify-center gap-2">
-              <Monitor className="h-5 w-5" />
-              CtrlCV Desktop
-            </CardTitle>
-            <CardDescription>QR or session code</CardDescription>
+        <Card className="gap-3 py-4 lg:gap-6 lg:py-6">
+          <CardHeader className="px-4 text-center lg:px-6">
+            <div className="flex items-center justify-between gap-2 lg:justify-center">
+              <CardTitle className="flex items-center gap-2">
+                <Clipboard className="h-5 w-5" />
+                CtrlCV
+              </CardTitle>
+              <Button type="button" variant="ghost" size="sm" className="lg:hidden"
+                aria-controls={connectionPanelId} aria-expanded={showConnectionDetails}
+                aria-label={showConnectionDetails ? "Hide connection details" : "Show connection details"}
+                disabled={!sessionData || isLoading || Boolean(sessionError)}
+                onClick={() => setIsConnectionPanelOpen((open) => !open)}>
+                <QrCode className="h-4 w-4" aria-hidden="true" />
+                QR
+                {showConnectionDetails
+                  ? <ChevronUp className="h-3 w-3" aria-hidden="true" />
+                  : <ChevronDown className="h-3 w-3" aria-hidden="true" />}
+              </Button>
+            </div>
+            <CardDescription className={`${showConnectionDetails ? "" : "hidden"} lg:block`}>
+              QR or session code
+            </CardDescription>
           </CardHeader>
 
-          <CardContent className="space-y-4">
+          {sessionData && !showConnectionDetails && (
+            <CardContent className="space-y-2 px-4 lg:hidden">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-sm text-muted-foreground">
+                  Session <span className="font-mono font-semibold text-foreground">{sessionData.sessionCode}</span>
+                </p>
+                <Button type="button" variant="ghost" size="sm"
+                  aria-label={isLinkCopied ? "Link copied" : "Copy link"}
+                  onClick={copySessionLink}>
+                  {isLinkCopied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                </Button>
+              </div>
+              <SessionExpiryCountdown expiresAt={sessionData.expiresAt} />
+              {!sessionData.requiresKey && (
+                <div className="flex items-center gap-1 text-xs text-amber-700 dark:text-amber-400">
+                  <span>Code-only access</span>
+                  <InfoTip label="About code-only access">
+                    Anyone with the code, including the server, can derive the encryption key
+                    and read messages and files.
+                  </InfoTip>
+                </div>
+              )}
+            </CardContent>
+          )}
+
+          <CardContent id={connectionPanelId} role="region" aria-label="Connection details"
+            className={`space-y-4 px-4 lg:px-6 ${showConnectionDetails ? "block" : "hidden"} lg:block`}>
             {isLoading ? (
               <div className="flex items-center justify-center py-12">
                 <Loader2 className="h-8 w-8 animate-spin text-primary" />

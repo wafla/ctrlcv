@@ -1,7 +1,9 @@
 export interface DeviceIdentity {
   id: string
   name: string
+  // Legacy wire format only; UI and ownership use name/id, not a device class.
   kind: "desktop" | "mobile"
+  namingVersion?: 2
 }
 
 export interface DeviceMessage {
@@ -13,6 +15,7 @@ export interface DeviceMessage {
 }
 
 export const DEVICE_NAME_LIMIT = 40
+export const DEFAULT_DEVICE_NAME = "Device"
 const DEVICE_ID_PATTERN = /^[a-f0-9]{32}$/
 
 export function isDeviceIdentity(value: unknown): value is DeviceIdentity {
@@ -22,8 +25,21 @@ export function isDeviceIdentity(value: unknown): value is DeviceIdentity {
     typeof device.id === "string" && DEVICE_ID_PATTERN.test(device.id) &&
     typeof device.name === "string" && device.name.trim().length > 0 &&
     device.name.length <= DEVICE_NAME_LIMIT &&
-    (device.kind === "desktop" || device.kind === "mobile")
+    (device.kind === "desktop" || device.kind === "mobile") &&
+    (device.namingVersion === undefined || device.namingVersion === 2)
   )
+}
+
+function getDeviceDisplayName(device: DeviceIdentity) {
+  const wasAutomaticName = device.namingVersion !== 2 && (
+    (device.kind === "desktop" && device.name === "PC") ||
+    (device.kind === "mobile" && device.name === "Mobile"))
+  return wasAutomaticName ? DEFAULT_DEVICE_NAME : device.name
+}
+
+export function restoreDeviceIdentity(value: unknown): DeviceIdentity | null {
+  if (!isDeviceIdentity(value)) return null
+  return { id: value.id, name: getDeviceDisplayName(value), kind: "desktop", namingVersion: 2 }
 }
 
 // Keep sender metadata inside the encrypted content, without a database migration.
@@ -55,8 +71,8 @@ export function isOwnDeviceMessage(message: DeviceMessage, deviceId?: string) {
 
 export function getSenderLabel(message: DeviceMessage, deviceId?: string) {
   if (!message.sender) {
-    return message.sender_type === "desktop" ? "PC (legacy)" : "Mobile (legacy)"
+    return "Unknown device"
   }
-  const label = `${message.sender.name} · ${message.sender.id.slice(0, 6).toUpperCase()}`
+  const label = `${getDeviceDisplayName(message.sender)} · ${message.sender.id.slice(0, 6).toUpperCase()}`
   return isOwnDeviceMessage(message, deviceId) ? "You" : label
 }

@@ -6,6 +6,7 @@ import {
   getSenderLabel,
   isDeviceIdentity,
   isOwnDeviceMessage,
+  restoreDeviceIdentity,
 } from "../lib/device-message.ts"
 import { decryptMessage, encryptMessage, getChatCryptoKey } from "../lib/client-crypto.ts"
 
@@ -51,8 +52,32 @@ test("legacy text and attachments remain readable without inventing device owner
     assert.deepEqual(decodeDeviceMessage(content), { content })
   }
   const legacy = { ...message(officePC), sender: undefined }
-  assert.equal(getSenderLabel(legacy, officePC.id), "PC (legacy)")
+  assert.equal(getSenderLabel(legacy, officePC.id), "Unknown device")
   assert.equal(isOwnDeviceMessage(legacy, officePC.id), false)
+})
+
+test("stored device IDs and custom names survive the move to a unified interface", () => {
+  for (const device of [officePC, homePC, phone]) {
+    const restored = restoreDeviceIdentity(device)
+    assert.equal(restored.id, device.id)
+    assert.equal(restored.name, device.name)
+  }
+  assert.equal(restoreDeviceIdentity(null), null)
+  assert.equal(restoreDeviceIdentity({ id: "invalid", name: "Device", kind: "desktop" }), null)
+})
+
+test("automatic device-type names are replaced with a neutral label", () => {
+  for (const sender of [{ ...officePC, name: "PC" }, { ...phone, name: "Mobile" }]) {
+    assert.equal(restoreDeviceIdentity(sender).name, "Device")
+    assert.match(getSenderLabel(message(sender)), /^Device · /)
+  }
+  const legacy = { ...message(phone), sender: undefined }
+  assert.equal(getSenderLabel(legacy), "Unknown device")
+  for (const name of ["PC", "Mobile"]) {
+    const custom = { ...officePC, name, namingVersion: 2 }
+    assert.equal(restoreDeviceIdentity(custom).name, name)
+    assert.match(getSenderLabel(message(custom)), new RegExp(`^${name} · `))
+  }
 })
 
 test("invalid device payloads are treated as content, never trusted as sender metadata", () => {

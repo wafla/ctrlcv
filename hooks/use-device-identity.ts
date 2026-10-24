@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { DEVICE_NAME_LIMIT, isDeviceIdentity, type DeviceIdentity } from "@/lib/device-message"
+import { DEFAULT_DEVICE_NAME, DEVICE_NAME_LIMIT, restoreDeviceIdentity, type DeviceIdentity } from "@/lib/device-message"
 
 const STORAGE_KEY = "ctrlcv:device:v1"
 let currentDevice: DeviceIdentity | null = null
@@ -26,29 +26,27 @@ export function useDeviceIdentity() {
   useEffect(() => {
     if (!currentDevice) {
       try {
-        const stored: unknown = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null")
-        if (isDeviceIdentity(stored)) currentDevice = stored
+        currentDevice = restoreDeviceIdentity(JSON.parse(localStorage.getItem(STORAGE_KEY) || "null"))
       } catch {}
       if (!currentDevice) {
-        const kind = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent) ||
-          (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)
-          ? "mobile" : "desktop"
         currentDevice = {
           id: Array.from(crypto.getRandomValues(new Uint8Array(16)),
             (byte) => byte.toString(16).padStart(2, "0")).join(""),
-          name: kind === "mobile" ? "Mobile" : "PC",
-          kind,
+          name: DEFAULT_DEVICE_NAME,
+          // Compatibility with the existing database and encrypted message format.
+          kind: "desktop",
+          namingVersion: 2,
         }
-        persist(currentDevice)
       }
+      persist(currentDevice)
     }
     setDevice(currentDevice)
     listeners.add(setDevice)
     const syncStorage = (event: StorageEvent) => {
       if (event.key !== STORAGE_KEY) return
       try {
-        const stored: unknown = JSON.parse(event.newValue || "null")
-        if (isDeviceIdentity(stored)) publish(stored)
+        const stored = restoreDeviceIdentity(JSON.parse(event.newValue || "null"))
+        if (stored) publish(stored)
       } catch {}
     }
     window.addEventListener("storage", syncStorage)
@@ -60,8 +58,7 @@ export function useDeviceIdentity() {
 
   const renameDevice = (name: string) => {
     if (!currentDevice) return
-    const updated = { ...currentDevice, name: name.trim().slice(0, DEVICE_NAME_LIMIT) ||
-      (currentDevice.kind === "mobile" ? "Mobile" : "PC") }
+    const updated = { ...currentDevice, name: name.trim().slice(0, DEVICE_NAME_LIMIT) || DEFAULT_DEVICE_NAME }
     persist(updated)
     publish(updated)
   }
