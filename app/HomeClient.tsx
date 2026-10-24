@@ -21,7 +21,7 @@ import {
   isOwnDeviceMessage,
   type DeviceMessage,
 } from "@/lib/device-message"
-import { Loader2, Clipboard, QrCode, RefreshCw, Send, Copy, Check, ChevronDown, ChevronUp, AlertCircle, Paperclip, Download, File as FileIcon, Upload, X } from "lucide-react"
+import { Loader2, Clipboard, QrCode, LogIn, RefreshCw, Send, Copy, Check, ChevronDown, ChevronUp, AlertCircle, Paperclip, Download, File as FileIcon, Upload, X } from "lucide-react"
 import {
   decryptMessage,
   encryptMessage,
@@ -405,6 +405,7 @@ function EncryptedAttachment({
 
 export default function HomePage() {
   const connectionPanelId = useId()
+  const joinFormId = useId()
   const [isConnectionPanelOpen, setIsConnectionPanelOpen] = useState(false)
   const { device, renameDevice } = useDeviceIdentity()
   const searchParams = useSearchParams()
@@ -1155,20 +1156,27 @@ export default function HomePage() {
                 </Button>
 
                 <Button
+                  type="button"
                   onClick={() => {
                     setSessionError(null)
                     setIsJoinFormOpen((open) => !open)
                   }}
-                  variant="secondary"
+                  variant="outline"
                   size="sm"
-                  className="w-full"
+                  className="relative w-full cursor-pointer bg-transparent aria-expanded:bg-muted/50"
+                  aria-expanded={isJoinFormOpen}
+                  aria-controls={joinFormId}
                   disabled={isLoading}
                 >
+                  <LogIn className="h-4 w-4 mr-2" aria-hidden="true" />
                   Join Session
+                  {isJoinFormOpen
+                    ? <ChevronUp className="absolute right-3 size-3 text-muted-foreground" aria-hidden="true" />
+                    : <ChevronDown className="absolute right-3 size-3 text-muted-foreground" aria-hidden="true" />}
                 </Button>
 
                 {isJoinFormOpen && (
-                  <div className="space-y-3 rounded-md border bg-muted/20 p-3">
+                  <div id={joinFormId} className="space-y-3 rounded-md border bg-muted/20 p-3">
                     <div className="space-y-2">
                       <Label htmlFor="joinSessionCode">Session Code</Label>
                       <Input
