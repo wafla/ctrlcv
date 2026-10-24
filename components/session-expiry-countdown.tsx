@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useMemo, useState } from "react"
+import { InfoTip } from "@/components/info-tip"
 
 function getRemainingMs(expiresAt: string) {
   const timestamp = new Date(expiresAt).getTime()
@@ -37,15 +38,15 @@ export function SessionExpiryCountdown({ expiresAt }: { expiresAt: string }) {
   }, [isExpired, isExpiringSoon])
 
   return (
-    <div className={`rounded-md border px-3 py-2 text-center ${containerClass}`}>
-      <p className="text-sm font-medium" aria-live="polite">
+    <div className={`flex items-center justify-center gap-1 rounded-md border px-3 py-1.5 ${containerClass}`}>
+      <p className="text-sm font-medium tabular-nums">
         {isExpired
           ? "Session expired"
-          : `Session expires in ${formatRemainingTime(remainingMs)}`}
+          : `Expires in ${formatRemainingTime(remainingMs)}`}
       </p>
-      <p className="mt-0.5 text-xs text-muted-foreground">
-        Sending a message resets the expiration time to 2 hours.
-      </p>
+      <InfoTip label="About session expiry">
+        Messages and files expire with the session. Sending a message resets the timer to 2 hours.
+      </InfoTip>
     </div>
   )
 }

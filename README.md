@@ -3,22 +3,30 @@
 CtrlCV is a temporary, login-free chat service for quickly exchanging messages
 and files between devices. Create a session on one device, then join from another
 device with the session code and 8-digit encryption key or by scanning the QR code.
+Private-key access is enabled by default; hosts can create a code-only session
+when they prefer connecting with just the session code.
 
 Live service: [https://ctrlcv.net](https://ctrlcv.net)
 
 ## Key Features
 
 - No account or login required
-- Session code and QR-based connection
+- Session code, QR code, and full invitation-link sharing
+- Editable device names and per-browser sender identification
 - Browser-side AES-GCM encryption for messages and files
-- The encryption key is kept in the URL fragment (`#key=...`) and is not sent to
+- In private-key mode, the key is kept in the URL fragment (`#key=...`) and is not sent to
   or stored on the server
-- Image and general file transfer, including HWP and HWPX
+- File transfer without extension restrictions, with parallel encrypted downloads
 - Adaptive attachment limit based on available server storage, up to 10 GB
 - Automatic deletion 2 hours after session creation or the most recent message
 - Anonymous usage events and daily aggregate statistics without message content
 - Responsive desktop and mobile interfaces
 - Privacy Policy and Terms of Service pages
+
+Use **Copy link** to share the full connection URL. Private-key links include
+the key in `#key=...`; code-only links include only the session code. Manual
+**Join** is enabled once a session code is entered, and checks for a private key
+when connecting to a protected session. Help icons show details on hover or tap.
 
 ## Privacy Model
 
@@ -26,9 +34,15 @@ Message content and attachments are encrypted in the sender's browser and
 decrypted in the recipient's browser. The server stores only encrypted message
 content and encrypted file blobs.
 
-The 8-digit encryption key must be shared separately or through the full QR link.
+In the default private-key mode, the 8-digit encryption key must be shared
+separately or through the full QR or invitation link.
 Anyone who has both the session code and encryption key can access the session
 until it expires.
+
+Code-only mode encrypts data with a key derived from the session code. Anyone
+who knows the code, including the server, can derive that key and read the data.
+Changing the access-mode switch creates a new session; it does not re-encrypt
+existing messages or files. The previous session remains available until expiry.
 
 Operational metrics do not contain message content. Raw usage events use a hashed
 session identifier and are deleted after 30 days, while date-level aggregate
@@ -98,6 +112,10 @@ scripts/scheduler_usage_cleanup.sql
 The cleanup job runs every 10 minutes. Expired attachment metadata and encrypted
 files are also removed by the application cleanup flow.
 
+For an existing database, run `scripts/migration_session_access.sql` before
+deploying code-only session support. It adds `sessions.requires_key` and keeps
+existing sessions in private-key mode. The migration is safe to run again.
+
 ### 4. Start development
 
 ```bash
@@ -106,32 +124,50 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000).
 
+Run automated tests with Node.js 24:
+
+```bash
+npm test
+```
+
 ## Production
 
-Build and run the production server:
+Commit and push local changes before updating the server. Run deployment
+commands from the project directory shown as `exec cwd` in `pm2 show ctrlcv`.
+
+Before the first deployment of code-only sessions, apply
+`scripts/migration_session_access.sql` to the target Oracle database using your
+SQL client. Skip this step if it has already been applied.
+
+Update an existing PM2 deployment:
 
 ```bash
-npm install
-npm run build
-pm2 restart ctrlcv --update-env
+git pull --ff-only &&
+git submodule update --init --recursive &&
+npm ci &&
+pm2 stop ctrlcv &&
+npm run build &&
+pm2 restart ctrlcv --update-env &&
 pm2 save
 ```
 
-If the PM2 process does not exist yet:
+The service is paused during the build to avoid serving mixed Next.js build
+assets. The chained commands stop on failure; only restart after a successful
+build.
+
+Check that the restarted server responds:
 
 ```bash
-pm2 start npm --name ctrlcv -- run start
-pm2 save
+curl --retry 5 --retry-connrefused --retry-delay 2 -I http://127.0.0.1:3000
 ```
 
-After pulling updates that include private submodule changes:
+If the PM2 process does not exist yet, use these commands after installation
+and database setup:
 
 ```bash
-git pull
-git submodule update --init --recursive
-npm install
-npm run build
-pm2 restart ctrlcv --update-env
+npm ci &&
+npm run build &&
+pm2 start npm --name ctrlcv -- run start &&
 pm2 save
 ```
 
@@ -177,6 +213,15 @@ tier, at least 10 MB of disk space is still kept free.
 | 5 GB or less | 10 MB |
 
 ## Recent Updates
+
+### 2026-10
+
+- Added editable device names and per-browser sender identification for messages and files
+- Added optional code-only sessions with private-key access enabled by default
+- Added three-chunk parallel downloads with ordered writes, retries, and cancellation on failure
+- Replaced separate code/key copy buttons with one full invitation-link button
+- Enabled Join with a session code regardless of key input length
+- Simplified desktop and mobile screens with hover/tap help icons
 
 ### 2026-09
 

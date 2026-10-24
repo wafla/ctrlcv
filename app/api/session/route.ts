@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server"
+import { randomInt } from "crypto"
 import { getConnection } from "@/lib/oracle"
 import { cleanupExpiredFiles } from "@/lib/server-files"
 import { recordUsageEvent } from "@/lib/usage"
@@ -8,15 +9,31 @@ function generateSessionCode(): string {
   const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
   let result = ""
   for (let i = 0; i < 6; i++) {
-    result += chars.charAt(Math.floor(Math.random() * chars.length))
+    result += chars.charAt(randomInt(chars.length))
   }
   return result
 }
 
-export async function POST() {
+export async function POST(request: Request) {
   let conn
 
   try {
+    let requiresKey = true
+    try {
+      const text = await request.text()
+      const body: unknown = text ? JSON.parse(text) : {}
+      if (!body || typeof body !== "object" || Array.isArray(body)) {
+        return NextResponse.json({ error: "Invalid session settings" }, { status: 400 })
+      }
+      const setting = (body as { requiresKey?: unknown }).requiresKey
+      if (setting !== undefined && typeof setting !== "boolean") {
+        return NextResponse.json({ error: "Invalid session settings" }, { status: 400 })
+      }
+      requiresKey = setting !== false
+    } catch {
+      return NextResponse.json({ error: "Invalid session settings" }, { status: 400 })
+    }
+
     conn = await getConnection()
     await cleanupExpiredFiles(conn)
 
@@ -53,6 +70,7 @@ export async function POST() {
       INSERT INTO sessions (
         id,
         session_code,
+        requires_key,
         is_active,
         created_at,
         expires_at
@@ -60,6 +78,7 @@ export async function POST() {
       VALUES (
         RAWTOHEX(sys_guid()),
         :code,
+        :requiresKey,
         1,
         SYS_EXTRACT_UTC(SYSTIMESTAMP),
         SYS_EXTRACT_UTC(SYSTIMESTAMP) + INTERVAL '2' HOUR
@@ -68,6 +87,7 @@ export async function POST() {
       `,
       {
         code: sessionCode,
+        requiresKey: requiresKey ? 1 : 0,
         id: { dir: oracledb.BIND_OUT, type: oracledb.STRING },
       }
     )
@@ -87,6 +107,7 @@ export async function POST() {
       sessionId,
       sessionCode,
       expiresAt,
+      requiresKey,
     })
   } catch (err: any) {
     if (conn) await conn.rollback()
@@ -119,9 +140,9 @@ export async function GET(request: Request) {
 
   try {
     const { searchParams } = new URL(request.url)
-    const code = searchParams.get("code")
+    const code = searchParams.get("code")?.trim().toUpperCase()
 
-    if (!code) {
+    if (!code || !/^[A-Z0-9]{6}$/.test(code)) {
       return NextResponse.json(
         { error: "Session code is required" },
         { status: 400 }
@@ -136,13 +157,15 @@ export async function GET(request: Request) {
       SELECT
         id,
         session_code,
+        requires_key,
         expires_at
       FROM sessions
       WHERE session_code = :code
         AND is_active = 1
         AND expires_at > SYS_EXTRACT_UTC(SYSTIMESTAMP)
       `,
-      { code }
+      { code },
+      { outFormat: oracledb.OUT_FORMAT_OBJECT }
     )
 
     if (!result.rows || result.rows.length === 0) {
@@ -164,6 +187,7 @@ export async function GET(request: Request) {
       sessionId: id,
       sessionCode,
       expiresAt,
+      requiresKey: row.REQUIRES_KEY !== 0,
     })
   } catch (err: any) {
     if (conn) {

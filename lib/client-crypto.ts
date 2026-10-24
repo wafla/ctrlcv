@@ -56,10 +56,27 @@ export async function getChatCryptoKey(
     throw new Error("An 8-digit encryption key is required");
   }
 
+  return deriveChatKey(sessionCode, keyParam, KEY_DERIVATION_PREFIX);
+}
+
+export async function getSessionCryptoKey(
+  sessionCode: string,
+  requiresKey: boolean,
+  keyParam?: string | null
+) {
+  if (requiresKey) return getChatCryptoKey(sessionCode, keyParam);
+
+  // Convenience mode only: anyone (including the server) who knows the code
+  // can derive this key. Do not claim the private-key mode's secrecy here.
+  return deriveChatKey(sessionCode, sessionCode.toUpperCase(), "ctrlcv-code-only-v1");
+}
+
+async function deriveChatKey(sessionCode: string, secret: string, prefix: string) {
+
   const encoder = new TextEncoder();
   const keyMaterial = await crypto.subtle.importKey(
     "raw",
-    encoder.encode(keyParam),
+    encoder.encode(secret),
     "PBKDF2",
     false,
     ["deriveKey"]
@@ -69,7 +86,7 @@ export async function getChatCryptoKey(
     {
       name: "PBKDF2",
       salt: encoder.encode(
-        `${KEY_DERIVATION_PREFIX}:${sessionCode.toUpperCase()}`
+        `${prefix}:${sessionCode.toUpperCase()}`
       ),
       iterations: 250000,
       hash: "SHA-256",

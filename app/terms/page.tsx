@@ -5,7 +5,7 @@ export default function TermsPage() {
         <div className="space-y-2">
           <h1 className="text-3xl font-bold">Terms of Service</h1>
           <p className="text-sm text-muted-foreground">
-            Last updated: July 10, 2026
+            Last updated: October 24, 2026
           </p>
         </div>
 
@@ -40,9 +40,11 @@ export default function TermsPage() {
         <section className="space-y-2">
           <h2 className="text-xl font-semibold">Encryption Key</h2>
           <p className="text-muted-foreground">
-            The encryption key is required to decrypt shared messages and files.
-            CtrlCV does not store this key on the server and cannot recover it
-            for you.
+            Private-key sessions require the encryption key to decrypt shared
+            messages and files. CtrlCV does not store this private key on the
+            server and cannot recover it for you. In optional code-only sessions,
+            anyone who knows the session code, including the server, can derive
+            the encryption key and access the shared content.
           </p>
         </section>
 

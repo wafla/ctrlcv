@@ -2,17 +2,28 @@
 
 import { useState, useEffect, useRef, type ClipboardEvent, type DragEvent } from "react"
 import { useSearchParams } from "next/navigation"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import type { SessionInfo } from "@/lib/session-info"
 import { Textarea } from "@/components/ui/textarea"
 import { SessionExpiryCountdown } from "@/components/session-expiry-countdown"
+import { DeviceNameInput } from "@/components/device-name-input"
+import { InfoTip } from "@/components/info-tip"
+import { useDeviceIdentity } from "@/hooks/use-device-identity"
+import {
+  decodeDeviceMessage,
+  encodeDeviceMessage,
+  getSenderLabel,
+  isOwnDeviceMessage,
+  type DeviceMessage,
+} from "@/lib/device-message"
 import { Smartphone, Monitor, Loader2, Send, Copy, Check, ArrowLeft, ChevronDown, ChevronUp, AlertCircle, Paperclip, Download, File as FileIcon, Upload, X } from "lucide-react"
 import {
   decryptMessage,
   encryptMessage,
-  getChatCryptoKey,
+  getSessionCryptoKey,
   getEncryptionKeyFromHash,
 } from "@/lib/client-crypto"
 import {
@@ -21,12 +32,7 @@ import {
   uploadEncryptedFile,
 } from "@/lib/client-file-transfer"
 
-interface Message {
-  id: string
-  content: string
-  sender_type: "desktop" | "mobile"
-  created_at: string
-}
+type Message = DeviceMessage
 
 interface ErrorInfo {
   message: string
@@ -155,12 +161,14 @@ function ErrorDisplay({ error, onDismiss }: { error: ErrorInfo; onDismiss?: () =
 // 메시지 접기/펴기 컴포넌트
 function CollapsibleMessage({ 
   message, 
+  deviceId,
   copiedMessageId, 
   onCopy,
   sessionId,
   encryptionKey,
 }: { 
   message: Message
+  deviceId?: string
   copiedMessageId: string | null
   onCopy: (content: string, id: string) => void
   sessionId: string
@@ -169,6 +177,7 @@ function CollapsibleMessage({
   const [isExpanded, setIsExpanded] = useState(false)
   const MAX_LENGTH = 200
   const attachment = parseAttachment(message.content)
+  const isOwn = isOwnDeviceMessage(message, deviceId)
 
   const shouldCollapse = message.content.length > MAX_LENGTH
   const displayContent = shouldCollapse && !isExpanded 
@@ -178,14 +187,14 @@ function CollapsibleMessage({
   return (
     <div
       className={`flex ${
-        message.sender_type === "mobile"
+        isOwn
           ? "justify-end"
           : "justify-start"
       }`}
     >
       <div
         className={`max-w-[85%] p-3 rounded-lg relative group ${
-          message.sender_type === "mobile"
+          isOwn
             ? "bg-primary text-primary-foreground"
             : "bg-card border"
         }`}
@@ -222,8 +231,8 @@ function CollapsibleMessage({
         )}
 
         <div className="flex items-center justify-between mt-2 gap-2">
-          <span className="text-xs opacity-70">
-            {message.sender_type === "mobile" ? "You" : "Desktop"}
+          <span className="min-w-0 break-words text-xs opacity-70">
+            {getSenderLabel(message, deviceId)}
             {formatMessageTime(message.created_at) ? ` · ${formatMessageTime(message.created_at)}` : ""}
           </span>
           <Button
@@ -396,17 +405,14 @@ function EncryptedAttachment({
 }
 
 export default function MobilePage() {
+  const { device, renameDevice } = useDeviceIdentity()
   const searchParams = useSearchParams()
   const codeFromUrl = searchParams.get("code")
 
   const [sessionCode, setSessionCode] = useState(codeFromUrl || "")
   const [encryptionKeyInput, setEncryptionKeyInput] = useState("")
   const [isConnecting, setIsConnecting] = useState(false)
-  const [sessionData, setSessionData] = useState<{
-    sessionId: string
-    sessionCode: string
-    expiresAt: string
-  } | null>(null)
+  const [sessionData, setSessionData] = useState<SessionInfo | null>(null)
   const [connectionError, setConnectionError] = useState<ErrorInfo | null>(null)
   const [messageError, setMessageError] = useState<ErrorInfo | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
@@ -523,12 +529,6 @@ export default function MobilePage() {
       return
     }
 
-    const keyParam = getEncryptionKeyFromHash() || encryptionKeyInput.trim()
-    if (!/^\d{8}$/.test(keyParam)) {
-      setConnectionError({ message: "Enter the 8-digit encryption key." })
-      return
-    }
-
     setIsConnecting(true)
     setConnectionError(null)
 
@@ -545,9 +545,17 @@ export default function MobilePage() {
         return
       }
       
-      const key = await getChatCryptoKey(data.sessionCode, keyParam)
+      const requiresKey = data.requiresKey !== false
+      const urlKey = code.trim().toUpperCase() === codeFromUrl?.toUpperCase()
+        ? getEncryptionKeyFromHash() : null
+      const keyParam = requiresKey ? encryptionKeyInput.trim() || urlKey : null
+      if (requiresKey && (!keyParam || !/^\d{8}$/.test(keyParam))) {
+        setConnectionError({ message: "This session requires the 8-digit encryption key." })
+        return
+      }
+      const key = await getSessionCryptoKey(data.sessionCode, requiresKey, keyParam)
 
-      setSessionData(data)
+      setSessionData({ ...data, requiresKey })
       setEncryptionKey(key)
     } catch (error: any) {
       setConnectionError({
@@ -579,9 +587,9 @@ export default function MobilePage() {
       const next: Message[] = await Promise.all(
         data.map(async (row: any) => ({
           id: row.ID,
-          content: await decryptMessage(row.CONTENT, encryptionKey).catch(
+          ...decodeDeviceMessage(await decryptMessage(row.CONTENT, encryptionKey).catch(
             () => "[Unable to decrypt message]"
-          ),
+          )),
           sender_type: row.SENDER_TYPE.toLowerCase(),
           created_at: row.CREATED_AT,
         }))
@@ -608,12 +616,12 @@ export default function MobilePage() {
   }
 
   const sendMessage = async () => {
-    if (!newMessage.trim() || !sessionData || !encryptionKey || isSending) return
+    if (!newMessage.trim() || !sessionData || !encryptionKey || !device || isSending) return
     setIsSending(true)
     setMessageError(null)
 
     try {
-      const encryptedContent = await encryptMessage(newMessage.trim(), encryptionKey)
+      const encryptedContent = await encryptMessage(encodeDeviceMessage(newMessage.trim(), device), encryptionKey)
 
       const response = await fetch("/api/messages", {
         method: "POST",
@@ -621,7 +629,7 @@ export default function MobilePage() {
         body: JSON.stringify({
           sessionId: sessionData.sessionId,
           content: encryptedContent,
-          senderType: "mobile",
+          senderType: device.kind,
         }),
       })
 
@@ -654,7 +662,7 @@ export default function MobilePage() {
   }
 
   const sendAttachment = async (file: File | null): Promise<boolean> => {
-    if (!file || !sessionData || !encryptionKey || attachmentUploadRef.current) return false
+    if (!file || !sessionData || !encryptionKey || !device || attachmentUploadRef.current) return false
 
     const validationError = getAttachmentValidationError(file, maxAttachmentSize)
     if (validationError) {
@@ -693,7 +701,7 @@ export default function MobilePage() {
         completedAttachmentRef.current = { file, attachment }
       }
       const encryptedContent = await encryptMessage(
-        JSON.stringify(attachment),
+        encodeDeviceMessage(JSON.stringify(attachment), device),
         encryptionKey
       )
 
@@ -703,7 +711,7 @@ export default function MobilePage() {
         body: JSON.stringify({
           sessionId: sessionData.sessionId,
           content: encryptedContent,
-          senderType: "mobile",
+          senderType: device.kind,
         }),
       })
       const messageData = await messageResponse.json()
@@ -882,14 +890,23 @@ export default function MobilePage() {
                 </p>
               </div>
             </div>
-            <div className="flex items-center gap-1 text-green-600">
-              <div className="w-2 h-2 bg-green-600 rounded-full animate-pulse" />
-              <span className="text-xs">Encrypted</span>
+            <div className={`flex items-center gap-1 ${sessionData.requiresKey
+              ? "text-green-600" : "text-amber-700 dark:text-amber-400"}`}>
+              <div className="w-2 h-2 rounded-full bg-current" />
+              <span className="text-xs">{sessionData.requiresKey ? "Encrypted" : "Code-only"}</span>
+              <InfoTip label="About session access">
+                {sessionData.requiresKey
+                  ? "Messages and files are encrypted in your browser with the shared private key."
+                  : "Anyone with the code, including the server, can derive the encryption key and read messages and files."}
+              </InfoTip>
             </div>
           </div>
 
           <div className="mb-4">
             <SessionExpiryCountdown expiresAt={sessionData.expiresAt} />
+          </div>
+          <div className="mb-4">
+            <DeviceNameInput device={device} onRename={renameDevice} />
           </div>
 
           {/* 메시지 에러 표시 */}
@@ -912,13 +929,14 @@ export default function MobilePage() {
               >
                 {messages.length === 0 ? (
                   <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
-                    No messages yet. Start typing to share text!
+                    No messages yet
                   </div>
                 ) : (
                   messages.map((message) => (
                     <CollapsibleMessage
                       key={message.id}
                       message={message}
+                      deviceId={device?.id}
                       copiedMessageId={copiedMessageId}
                       onCopy={copyToClipboard}
                       sessionId={sessionData.sessionId}
@@ -944,11 +962,16 @@ export default function MobilePage() {
           </Card>
 
           {/* Input */}
-          <p className="mb-2 text-xs text-muted-foreground">
-            {maxAttachmentSize > 0
-              ? `Current attachment limit: ${formatFileSize(maxAttachmentSize)}`
-              : "Attachments are temporarily unavailable due to low server storage."}
-          </p>
+          <div className="mb-2 flex items-center gap-1 text-xs text-muted-foreground">
+            <span>
+              {maxAttachmentSize > 0
+                ? `Files up to ${formatFileSize(maxAttachmentSize)}`
+                : "Uploads unavailable"}
+            </span>
+            <InfoTip label="About file limits">
+              The file limit adjusts to available server storage and refreshes automatically.
+            </InfoTip>
+          </div>
           <div className="flex gap-2">
             <input
               ref={attachmentInputRef}
@@ -1052,16 +1075,14 @@ export default function MobilePage() {
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
           <h1 className="text-4xl font-bold text-foreground mb-2">CtrlCV</h1>
-          <p className="text-muted-foreground">Connect to your desktop session</p>
         </div>
 
         <Card>
           <CardHeader className="text-center">
             <CardTitle className="flex items-center justify-center gap-2">
               <Smartphone className="h-5 w-5" />
-              Mobile Connection
+              Join Session
             </CardTitle>
-            <CardDescription>Enter the session code from your computer</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-2">
@@ -1069,7 +1090,7 @@ export default function MobilePage() {
               <Input
                 id="sessionCode"
                 type="text"
-                placeholder="Enter 6-digit code"
+                placeholder="Enter 6-character code"
                 value={sessionCode}
                 onChange={(e) => setSessionCode(e.target.value.toUpperCase())}
                 maxLength={6}
@@ -1078,7 +1099,13 @@ export default function MobilePage() {
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="encryptionKey">Encryption Key</Label>
+              <div className="flex items-center gap-1">
+                <Label htmlFor="encryptionKey">Encryption Key</Label>
+                <InfoTip label="When a key is required">
+                  Enter the host's 8-digit key, or leave blank for a code-only session.
+                  A private key is never sent to the server.
+                </InfoTip>
+              </div>
               <Input
                 id="encryptionKey"
                 type="text"
@@ -1094,9 +1121,6 @@ export default function MobilePage() {
                 maxLength={8}
                 className="text-center text-lg font-mono tracking-widest"
               />
-              <p className="text-xs text-muted-foreground text-center">
-                This key decrypts messages in your browser and is never sent to the server.
-              </p>
             </div>
 
             {connectionError && (
@@ -1109,7 +1133,7 @@ export default function MobilePage() {
             <Button
               onClick={() => connectToSession(sessionCode)}
               className="w-full"
-              disabled={isConnecting || !sessionCode.trim() || encryptionKeyInput.length !== 8}
+              disabled={isConnecting || sessionCode.trim().length !== 6}
             >
               {isConnecting ? (
                 <>
@@ -1119,7 +1143,7 @@ export default function MobilePage() {
               ) : (
                 <>
                   <Monitor className="h-4 w-4 mr-2" />
-                  Connect to Desktop
+                  Join
                 </>
               )}
             </Button>

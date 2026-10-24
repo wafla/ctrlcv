@@ -5,7 +5,7 @@ export default function PrivacyPage() {
         <div className="space-y-2">
           <h1 className="text-3xl font-bold">Privacy Policy</h1>
           <p className="text-sm text-muted-foreground">
-            Last updated: July 10, 2026
+            Last updated: October 24, 2026
           </p>
         </div>
 
@@ -26,9 +26,19 @@ export default function PrivacyPage() {
             creation time, and expiration time.
           </p>
           <p className="text-muted-foreground">
-            The encryption key is not stored on the server. If you lose the
+            In the default private-key mode, the encryption key is not stored on the server. If you lose the
             session code or encryption key, the service cannot recover your
             messages or files.
+          </p>
+          <p className="text-muted-foreground">
+            In optional code-only sessions, the encryption key is derived from
+            the session code. Anyone with that code, including the server, can
+            derive the key and read messages and files.
+          </p>
+          <p className="text-muted-foreground">
+            A random device identifier and your chosen device name are saved in
+            this browser to distinguish senders. They are included inside the
+            encrypted message content, not stored as separate server metadata.
           </p>
         </section>
 

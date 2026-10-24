@@ -100,6 +100,7 @@ export async function GET(
         return new Response(chunk, {
           headers: {
             "Content-Type": "application/octet-stream",
+            "Content-Length": String(bytesRead),
             "Cache-Control": "no-store",
             "X-Original-Content-Type": row.MIME_TYPE,
           },

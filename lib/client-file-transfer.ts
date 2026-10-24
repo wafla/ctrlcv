@@ -3,6 +3,7 @@ import {
   decryptFileChunk,
   encryptFileChunk,
 } from "@/lib/client-crypto"
+import { consumeOrderedChunks } from "@/lib/ordered-download"
 
 export const FILE_CHUNK_SIZE = 8 * 1024 * 1024
 export const FILE_CHUNK_ENCRYPTION_OVERHEAD = 28
@@ -163,34 +164,92 @@ export async function uploadEncryptedFile({
 }
 
 function isChunkedAttachment(attachment: ChunkedAttachmentInfo) {
-  return (
-    attachment.transferVersion === "chunked-v1" &&
+  if (attachment.transferVersion !== "chunked-v1") return false
+  const valid = (
+    Number.isSafeInteger(attachment.size) && attachment.size > 0 &&
     Number.isSafeInteger(attachment.chunkSize) &&
     Number.isSafeInteger(attachment.chunkCount) &&
     attachment.chunkSize === FILE_CHUNK_SIZE &&
-    (attachment.chunkCount ?? 0) > 0
+    attachment.chunkCount === Math.ceil(attachment.size / FILE_CHUNK_SIZE)
   )
+  if (!valid) throw new Error("Invalid chunked attachment metadata.")
+  return true
+}
+
+class PermanentDownloadError extends Error {}
+
+function waitForRetry(delay: number, signal: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    if (signal.aborted) { reject(signal.reason); return }
+    const cancel = () => { clearTimeout(timer); reject(signal.reason) }
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", cancel)
+      resolve()
+    }, delay)
+    signal.addEventListener("abort", cancel, { once: true })
+  })
 }
 
 async function fetchEncryptedChunk(
   attachment: ChunkedAttachmentInfo,
   accessToken: string,
-  index: number
+  index: number,
+  signal: AbortSignal
 ) {
   const chunkSize = attachment.chunkSize!
   const plaintextStart = index * chunkSize
   const plaintextLength = Math.min(chunkSize, attachment.size - plaintextStart)
   const encryptedLength = plaintextLength + FILE_CHUNK_ENCRYPTION_OVERHEAD
   const encryptedOffset = index * (chunkSize + FILE_CHUNK_ENCRYPTION_OVERHEAD)
-  const response = await fetch(
-    `/api/files/${attachment.fileId}?offset=${encryptedOffset}&length=${encryptedLength}`,
-    {
-      cache: "no-store",
-      headers: { Authorization: `Bearer ${accessToken}` },
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const response = await fetch(
+        `/api/files/${attachment.fileId}?offset=${encryptedOffset}&length=${encryptedLength}`,
+        {
+          cache: "no-store",
+          signal,
+          headers: { Authorization: `Bearer ${accessToken}` },
+        }
+      )
+      if (!response.ok) {
+        await response.body?.cancel().catch(() => {})
+        const message = `Failed to download file chunk (HTTP ${response.status}).`
+        if (response.status < 500 && response.status !== 408 && response.status !== 429) {
+          throw new PermanentDownloadError(message)
+        }
+        throw new Error(message)
+      }
+      const encrypted = await response.arrayBuffer()
+      if (encrypted.byteLength !== encryptedLength) {
+        throw new Error("The download server returned an incomplete file chunk.")
+      }
+      return encrypted
+    } catch (error) {
+      if (signal.aborted || error instanceof PermanentDownloadError || attempt === 2) throw error
+      await waitForRetry(200 * 2 ** attempt, signal)
+    }
+  }
+  throw new Error("Failed to download file chunk.")
+}
+
+async function downloadChunks(
+  options: DownloadOptions,
+  write: (chunk: ArrayBuffer) => Promise<void>
+) {
+  const { attachment, encryptionKey, sessionId, onProgress } = options
+  const accessToken = await getFileAccessToken(attachment.fileId, sessionId)
+  onProgress?.(0)
+  await consumeOrderedChunks(
+    attachment.chunkCount!,
+    async (index, signal) => {
+      const encrypted = await fetchEncryptedChunk(attachment, accessToken, index, signal)
+      return decryptFileChunk(encrypted, encryptionKey)
+    },
+    async (decrypted, index) => {
+      await write(decrypted)
+      onProgress?.(Math.round(((index + 1) / attachment.chunkCount!) * 100))
     }
   )
-  if (!response.ok) throw new Error("Failed to download encrypted file chunk.")
-  return response.arrayBuffer()
 }
 
 async function getFileAccessToken(fileId: string, sessionId: string) {
@@ -220,13 +279,10 @@ export async function loadEncryptedAttachmentBlob({
     return decryptFile(await response.arrayBuffer(), encryptionKey, attachment.mimeType)
   }
 
-  const accessToken = await getFileAccessToken(attachment.fileId, sessionId)
   const decryptedChunks: ArrayBuffer[] = []
-  for (let index = 0; index < attachment.chunkCount!; index += 1) {
-    const encrypted = await fetchEncryptedChunk(attachment, accessToken, index)
-    decryptedChunks.push(await decryptFileChunk(encrypted, encryptionKey))
-    onProgress?.(Math.round(((index + 1) / attachment.chunkCount!) * 100))
-  }
+  await downloadChunks({ attachment, encryptionKey, sessionId, onProgress }, async (chunk) => {
+    decryptedChunks.push(chunk)
+  })
   return new Blob(decryptedChunks, { type: attachment.mimeType })
 }
 
@@ -280,13 +336,8 @@ export async function saveEncryptedAttachment({
   const handle = await picker.call(window, { suggestedName: attachment.fileName })
   const writable = await handle.createWritable()
   try {
-    const accessToken = await getFileAccessToken(attachment.fileId, sessionId)
-    for (let index = 0; index < attachment.chunkCount!; index += 1) {
-      const encrypted = await fetchEncryptedChunk(attachment, accessToken, index)
-      const decrypted = await decryptFileChunk(encrypted, encryptionKey)
-      await writable.write(decrypted)
-      onProgress?.(Math.round(((index + 1) / attachment.chunkCount!) * 100))
-    }
+    await downloadChunks({ attachment, encryptionKey, sessionId, onProgress },
+      (chunk) => writable.write(chunk))
     await writable.close()
   } catch (error) {
     await writable.abort().catch(() => {})
