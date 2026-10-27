@@ -146,6 +146,15 @@ Before the first deployment of code-only sessions, apply
 SQL client. Skip this step if it has already been applied.
 The unified interface and collapsible QR panel need no additional database changes.
 
+For file streaming, use `deploy/nginx-file-transfer.conf` inside the CtrlCV TLS
+server block, replacing any existing file location. Do not use a trailing-slash
+`location /api/files/` prefix: Nginx and Next.js can redirect `/api/files` back and
+forth. After proxy or application changes, verify the public upload-limit endpoint:
+
+```bash
+node scripts/check-upload-limit.mjs https://www.ctrlcv.net
+```
+
 Update an existing PM2 deployment:
 
 ```bash
@@ -206,10 +215,13 @@ The attachment limit is recalculated from the free space in the upload volume:
 max(10 MB, min(10 GB, (free space - 5 GB reserve) / 3))
 ```
 
-The limit falls back to 10 MB when free space is 5 GB or less. The client
+The server limit falls back to 10 MB when free space is 5 GB or less. The client
 refreshes the current limit every 30 seconds, and the server verifies it again
 when an upload starts and before writing every encrypted chunk. In this fallback
 tier, at least 10 MB of disk space is still kept free.
+
+While capacity is loading or unavailable, the client does not invent a 10 MB
+limit. It shows the lookup status and lets the upload API enforce actual capacity.
 
 | Free space | Approximate maximum file size |
 | --- | ---: |
@@ -223,6 +235,7 @@ tier, at least 10 MB of disk space is still kept free.
 
 ### 2026-10
 
+- Fixed upload-limit lookup redirects and removed the misleading client-side 10 MB fallback
 - Unified the CtrlCV interface across devices, preserving existing `/mobile` invitation links
 - Added a collapsible QR panel on small screens with session code, expiry, and link-copy controls
 - Added editable device names and per-browser sender identification for messages and files

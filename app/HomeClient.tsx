@@ -14,6 +14,7 @@ import { SessionExpiryCountdown } from "@/components/session-expiry-countdown"
 import { DeviceNameInput } from "@/components/device-name-input"
 import { InfoTip } from "@/components/info-tip"
 import { useDeviceIdentity } from "@/hooks/use-device-identity"
+import { fetchUploadLimit } from "@/lib/upload-limit"
 import {
   decodeDeviceMessage,
   encodeDeviceMessage,
@@ -54,9 +55,9 @@ interface Attachment {
   chunkCount?: number
 }
 
-const DEFAULT_ATTACHMENT_SIZE = 10 * 1024 * 1024
-
-function getAttachmentValidationError(file: File, maxAttachmentSize: number) {
+function getAttachmentValidationError(file: File, maxAttachmentSize: number | null) {
+  // The upload API still enforces actual capacity if the advisory limit is unknown.
+  if (maxAttachmentSize === null) return null
   if (maxAttachmentSize <= 0) {
     return "Uploads are temporarily unavailable due to low server storage."
   }
@@ -422,7 +423,8 @@ export default function HomePage() {
   const [isUploadingAttachment, setIsUploadingAttachment] = useState(false)
   const [uploadProgress, setUploadProgress] = useState<number | null>(null)
   const [isDraggingAttachment, setIsDraggingAttachment] = useState(false)
-  const [maxAttachmentSize, setMaxAttachmentSize] = useState(DEFAULT_ATTACHMENT_SIZE)
+  const [maxAttachmentSize, setMaxAttachmentSize] = useState<number | null>(null)
+  const [isUploadLimitLoading, setIsUploadLimitLoading] = useState(true)
   const [pendingAttachment, setPendingAttachment] = useState<File | null>(null)
   const [pendingAttachmentUrl, setPendingAttachmentUrl] = useState<string | null>(null)
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null)
@@ -468,21 +470,23 @@ export default function HomePage() {
 
   useEffect(() => {
     let cancelled = false
+    let activeRequest: AbortController | null = null
 
     async function loadUploadLimit() {
+      const controller = new AbortController()
+      activeRequest = controller
+      const timeout = setTimeout(() => controller.abort(), 10000)
       try {
-        const response = await fetch("/api/files", { cache: "no-store" })
-        const data = await response.json()
-        if (
-          !cancelled &&
-          response.ok &&
-          typeof data.maxFileSize === "number" &&
-          data.maxFileSize >= 0
-        ) {
-          setMaxAttachmentSize(data.maxFileSize)
-        }
+        const limit = await fetchUploadLimit(controller.signal)
+        if (!cancelled) setMaxAttachmentSize(limit)
       } catch (error) {
-        console.warn("Failed to load upload limit:", error)
+        if (!cancelled) {
+          setMaxAttachmentSize(null)
+          console.warn("Failed to load upload limit:", error)
+        }
+      } finally {
+        clearTimeout(timeout)
+        if (!cancelled) setIsUploadLimitLoading(false)
       }
     }
 
@@ -490,6 +494,7 @@ export default function HomePage() {
     const interval = setInterval(loadUploadLimit, 30000)
     return () => {
       cancelled = true
+      activeRequest?.abort()
       clearInterval(interval)
     }
   }, [])
@@ -1272,7 +1277,9 @@ export default function HomePage() {
             <CardTitle>Chat</CardTitle>
             <CardDescription className="flex items-center gap-1">
               <span>
-                {maxAttachmentSize > 0
+                {maxAttachmentSize === null
+                  ? isUploadLimitLoading ? "Checking file limit..." : "File limit unavailable"
+                  : maxAttachmentSize > 0
                   ? `Files up to ${formatFileSize(maxAttachmentSize)}`
                   : "Uploads unavailable"}
               </span>
